@@ -3,14 +3,14 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
 import { useTheme } from "next-themes";
-import { LayoutDashboard, Menu, Moon, Settings, Sun, Users, X } from "lucide-react";
+import { ClipboardList, LayoutDashboard, Menu, Moon, PenLine, Settings, Sun, Users, X } from "lucide-react";
 import { Logo } from "@/components/brand/logo";
 import { Badge } from "@/components/ui/badge";
 import { SignOutButton } from "./sign-out-button";
 import { cn } from "@/lib/utils";
 import type { NavItem } from "@/lib/nav";
 
-const ICONS = { dashboard: LayoutDashboard, users: Users, settings: Settings } as const;
+const ICONS = { dashboard: LayoutDashboard, users: Users, settings: Settings, updates: PenLine, team: ClipboardList } as const;
 
 function ThemeToggle() {
   const { resolvedTheme, setTheme } = useTheme();

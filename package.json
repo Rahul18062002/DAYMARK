@@ -2,7 +2,7 @@
   "name": "daymark",
   "version": "0.1.0",
   "private": true,
-  "description": "Daymark \u2014 Make Every Day Count. AI-powered work updates, summaries and reports.",
+  "description": "Daymark — Make Every Day Count. AI-powered work updates, summaries and reports.",
   "scripts": {
     "dev": "next dev",
     "build": "prisma generate && next build",
@@ -32,6 +32,7 @@
     "pg": "^8.23.1",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
+    "recharts": "^3.10.1",
     "server-only": "^0.0.1",
     "sonner": "^2.0.8",
     "tailwind-merge": "^3.7.0",

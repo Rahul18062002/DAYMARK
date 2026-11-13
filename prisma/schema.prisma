@@ -34,6 +34,34 @@ enum InvitationStatus {
   REVOKED
 }
 
+enum UpdateStatus {
+  DRAFT
+  SUBMITTED
+  EDITED
+}
+
+// Where an update came from. Every channel writes the same DailyUpdate record.
+enum UpdateSource {
+  DASHBOARD
+  SLACK
+  EMAIL
+  WHATSAPP
+  EXTERNAL_FORM
+}
+
+enum UpdateSection {
+  WORKED_ON
+  COMPLETED
+  PENDING
+  BLOCKER
+  NEXT_PRIORITY
+}
+
+enum RevisionKind {
+  SUBMITTED
+  EDITED
+}
+
 // ───────────────────────── Identity (Better Auth) ─────────────────────────
 
 model User {
@@ -130,6 +158,7 @@ model Organization {
   invitations Invitation[]
   teamAccess  ManagerTeamAccess[]
   auditLogs   AuditLog[]
+  dailyUpdates DailyUpdate[]
 }
 
 model OrgSettings {
@@ -201,6 +230,7 @@ model Membership {
   managedTeams  Team[]              @relation("TeamManager")
   teamAccess    ManagerTeamAccess[]
   invitationsSent Invitation[]
+  dailyUpdates  DailyUpdate[]
 
   @@unique([userId, organizationId])
   @@unique([id, organizationId])
@@ -261,4 +291,87 @@ model AuditLog {
 
   @@index([organizationId, createdAt])
   @@index([organizationId, entityType, entityId])
+}
+
+
+// ───────────────────────── Daily updates ─────────────────────────
+
+/// One update per person per day. Content lives in UpdateItem rows (one or more
+/// natural-language entries per section) so a single paragraph and a long list are
+/// both valid, and later channels (Slack/email/…) can fill the same structure.
+model DailyUpdate {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  membershipId   String
+  membership     Membership   @relation(fields: [membershipId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  /// Calendar day the update is about (in the organization's timezone).
+  updateDate     DateTime     @db.Date
+  status         UpdateStatus @default(DRAFT)
+  source         UpdateSource @default(DASHBOARD)
+  /// Denormalized from BLOCKER items for fast manager filtering. Kept in sync by the service.
+  hasBlockers    Boolean      @default(false)
+  /// The ORIGINAL submission time. Never overwritten by later edits.
+  firstSubmittedAt DateTime?
+  /// Was the original submission after the day's cut-off? Fixed at first submission.
+  submittedLate  Boolean      @default(false)
+  lastEditedAt   DateTime?
+  /// Number of revisions recorded so far (0 while a draft).
+  revisionCount  Int          @default(0)
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  items       UpdateItem[]
+  attachments UpdateAttachment[]
+  revisions   UpdateRevision[]
+
+  @@unique([membershipId, updateDate])
+  @@unique([id, organizationId])
+  @@index([organizationId, updateDate])
+  @@index([organizationId, membershipId, updateDate])
+  @@index([organizationId, updateDate, status])
+}
+
+model UpdateItem {
+  id             String        @id @default(cuid())
+  organizationId String
+  dailyUpdateId  String
+  dailyUpdate    DailyUpdate   @relation(fields: [dailyUpdateId, organizationId], references: [id, organizationId], onDelete: Cascade)
+  section        UpdateSection
+  position       Int
+  text           String
+
+  @@index([dailyUpdateId, section, position])
+  @@index([organizationId, section])
+}
+
+/// MVP supports links only; file uploads can reuse this table later (file reference + name).
+model UpdateAttachment {
+  id             String      @id @default(cuid())
+  organizationId String
+  dailyUpdateId  String
+  dailyUpdate    DailyUpdate @relation(fields: [dailyUpdateId, organizationId], references: [id, organizationId], onDelete: Cascade)
+  position       Int
+  url            String
+  label          String?
+
+  @@index([dailyUpdateId, position])
+}
+
+/// Append-only history. `statusAtTime` and `snapshot` preserve exactly what was
+/// submitted (revision 1 is the original submission) even after later edits.
+model UpdateRevision {
+  id             String       @id @default(cuid())
+  organizationId String
+  dailyUpdateId  String
+  dailyUpdate    DailyUpdate  @relation(fields: [dailyUpdateId, organizationId], references: [id, organizationId], onDelete: Cascade)
+  revisionNumber Int
+  kind           RevisionKind
+  statusAtTime   UpdateStatus
+  changedByUserId String
+  snapshot       Json
+  createdAt      DateTime     @default(now())
+
+  @@unique([dailyUpdateId, revisionNumber])
+  @@index([organizationId, createdAt])
 }

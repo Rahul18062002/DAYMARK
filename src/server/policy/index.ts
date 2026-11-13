@@ -20,6 +20,10 @@ const RULES = {
   "member:manage": ["ADMIN"],
   "member:list": ["ADMIN", "MANAGER"],
   "audit:read": ["ADMIN"],
+  // Everyone who works in the organization submits their own updates...
+  "update:write": ["ADMIN", "MANAGER", "EMPLOYEE"],
+  // ...but only admins and managers read other people's (within their scope).
+  "update:team": ["ADMIN", "MANAGER"],
 } as const satisfies Record<string, readonly Role[]>;
 
 export type Action = keyof typeof RULES;

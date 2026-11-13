@@ -61,3 +61,22 @@ export function linkIn(mail: Mail, pattern: RegExp): string {
   if (!m) throw new Error(`No link matching ${pattern} in:\n${mail.text}`);
   return m[0];
 }
+
+/** Create an organization through the public onboarding API; returns a signed-in admin API client. */
+export async function createOrgApi(baseURL: string, o: { org: string; name: string; email: string }) {
+  const anon = await anonApi(baseURL);
+  const res = await anon.post("/api/onboarding", { data: { organizationName: o.org, timezone: "UTC", name: o.name, email: o.email, password: PASSWORD } });
+  expect(res.ok(), await res.text()).toBeTruthy();
+  return apiAs(baseURL, o.email);
+}
+
+/** Invite + accept through the HTTP API (fast setup). Returns the new member's id. */
+export async function addMemberApi(baseURL: string, adminApi: APIRequestContext, m: { role: "EMPLOYEE" | "MANAGER"; email: string; name: string; teamId?: string }) {
+  const inv = await adminApi.post("/api/invitations", { data: { email: m.email, role: m.role, teamId: m.teamId } });
+  expect(inv.ok(), await inv.text()).toBeTruthy();
+  const { inviteUrl } = await inv.json();
+  const acc = await (await anonApi(baseURL)).post("/api/invitations/accept", { data: { token: inviteUrl.split("/invite/")[1], name: m.name, password: PASSWORD } });
+  expect(acc.ok(), await acc.text()).toBeTruthy();
+  const list = (await (await adminApi.get("/api/employees?status=ACTIVE")).json()).employees as { id: string; email: string }[];
+  return list.find((e) => e.email === m.email)!.id;
+}

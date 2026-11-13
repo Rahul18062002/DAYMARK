@@ -94,3 +94,55 @@ export const memberFilterSchema = z.object({
   departmentId: idSchema.optional(),
   teamId: idSchema.optional(),
 });
+
+// ── Daily updates ───────────────────────────────────────────────────────────
+export const MAX_ITEMS_PER_SECTION = 20;
+export const MAX_ITEM_LENGTH = 2000;
+export const MAX_LINKS = 10;
+
+export const dayStringSchema = z
+  .string()
+  .regex(/^\d{4}-\d{2}-\d{2}$/, "Use a valid date")
+  .refine((d) => !Number.isNaN(new Date(`${d}T00:00:00Z`).getTime()) && new Date(`${d}T00:00:00Z`).toISOString().slice(0, 10) === d, "Use a valid date");
+
+const itemText = z.string().trim().min(1, "Entries can't be empty").max(MAX_ITEM_LENGTH, `Keep each entry under ${MAX_ITEM_LENGTH} characters`);
+const itemList = z.array(itemText).max(MAX_ITEMS_PER_SECTION, `At most ${MAX_ITEMS_PER_SECTION} entries per section`);
+
+export const sectionsSchema = z
+  .object({
+    workedOn: itemList.default([]),
+    completed: itemList.default([]),
+    pending: itemList.default([]),
+    blockers: itemList.default([]),
+    nextPriorities: itemList.default([]),
+  })
+  .refine((s) => Object.values(s).flat().join("").length <= 20_000, "This update is too long");
+
+// Only http(s) links are accepted, so a stored link can never be a javascript: / data: URL.
+export const linkSchema = z.object({
+  url: z.string().trim().max(500).pipe(z.url("Enter a full link starting with https://")).refine((u) => /^https?:\/\//i.test(u), "Links must start with http:// or https://"),
+  label: z.string().trim().max(100).optional().transform((v) => v || undefined),
+});
+
+export const createUpdateSchema = z.object({
+  updateDate: dayStringSchema.optional(),
+  sections: sectionsSchema,
+  links: z.array(linkSchema).max(MAX_LINKS, `At most ${MAX_LINKS} links`).default([]),
+  submit: z.boolean().default(false),
+});
+
+export const patchUpdateSchema = z.object({
+  sections: sectionsSchema.optional(),
+  links: z.array(linkSchema).max(MAX_LINKS).optional(),
+  submit: z.boolean().optional(),
+});
+
+export const teamUpdateFilterSchema = z.object({
+  from: dayStringSchema.optional(),
+  to: dayStringSchema.optional(),
+  departmentId: idSchema.optional(),
+  teamId: idSchema.optional(),
+  membershipId: idSchema.optional(),
+  status: z.enum(["submitted", "edited", "missing"]).optional(),
+  blockers: z.enum(["1"]).optional(),
+});

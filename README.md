@@ -4,7 +4,7 @@ Daymark helps companies collect daily work updates, understand individual and te
 surface blockers, and (from Phase 3) generate AI summaries and weekly reports.
 It is a multi-company SaaS: every company gets an isolated workspace.
 
-**Status: Phase 1 (Foundation) complete.** Daily updates (Phase 2), AI (Phase 3) and finalization (Phase 4) are not built yet.
+**Status: Phase 1 (Foundation) and Phase 2 (Daily Updates) complete.** AI summaries and weekly reports (Phase 3) and the finalization pass (Phase 4) are not built yet.
 
 ## Stack
 Next.js 16 (App Router) · TypeScript · Tailwind CSS 4 · PostgreSQL · Prisma 7 · Better Auth · Zod · Nodemailer (SMTP) · Vitest · Playwright
@@ -18,7 +18,8 @@ src/
   server/
     auth/         Better Auth config, request context (session -> active membership)
     policy/       THE place for role + manager-scope rules
-    services/     business logic (organization, structure, members, invitations, overview)
+    services/     business logic (organization, structure, members, invitations, overview, updates, team-updates)
+    channels/     ingest.ts — the single entry point every submission channel goes through
     email/        SMTP mailer + Daymark email templates
     http.ts       route wrapper: origin check, auth, rate limit, uniform errors
   components/     ui primitives, brand (logo), layout shell
@@ -76,6 +77,16 @@ Copy `.env.test.example` to `.env.test` (it points at a database named `daymark_
 4. Apply migrations against production before/at release: `DATABASE_URL=<direct url> npx prisma migrate deploy` (CI step or one-off).
 5. Configure SMTP (e.g. any provider with SMTP credentials) so invitations and password resets are emailed.
 
+## Daily updates (Phase 2)
+* **Update model:** one `DailyUpdate` per person per day (`@@unique(membershipId, updateDate)`). Content is stored as free-text entries per section (`UpdateItem`: worked on, completed, pending, blockers, next priorities), so a single natural-language paragraph and a long list are both valid. Links are stored in `UpdateAttachment` (http/https only; file uploads can reuse the table later).
+* **Statuses:** `DRAFT` → `SUBMITTED` → `EDITED`. Drafts are private to the author. `firstSubmittedAt` (the original submission time) and `submittedLate` are fixed at first submission and never overwritten.
+* **Revision history:** `UpdateRevision` is append-only. Revision 1 is the original submission; every later edit adds a revision with a full snapshot and the status at that time. Unchanged saves create no revision.
+* **Edit window:** configurable in Settings (hours, `0` = no edits), measured from the original submission and enforced by the server.
+* **Dates:** an update's day is the organization's calendar day (timezone-aware). Employees can add updates for today or up to 7 days back, never the future. "Late" = submitted after the day's cut-off in the organization's timezone.
+* **Manager / admin view:** `/team-updates` — overview cards, per-day trend, filters (date range ≤ 31 days, department, team, employee, status, blockers), "not submitted" rows (working days only, never before a person joined), full submission detail with version history, and the employees' own recent blockers / pending / completed entries. Managers only see their managed teams, direct reports and explicitly granted teams; out-of-scope updates return 404. Drafts are never visible to anyone but the author.
+* **Channels:** every channel calls `server/channels/ingest.ts#ingestUpdate`, which writes the same record with `source` set (`DASHBOARD` today; `SLACK`, `EMAIL`, `WHATSAPP`, `EXTERNAL_FORM` reserved). Only the dashboard exists; no other channel is implemented. The dashboard API fixes the channel server-side.
+* **Reported ≠ verified:** the UI labels everything as the employee's own report.
+
 ## Phase 1 checklist
 - [x] Project setup, Prisma schema + migrations, tenant-safe composite foreign keys
 - [x] Better Auth (email + password), sessions, forgot / reset password (SMTP)
@@ -88,9 +99,15 @@ Copy `.env.test.example` to `.env.test` (it points at a database named `daymark_
 - [x] Audit log writes + admin activity feed
 - [x] Daymark branding (logo, favicon, light/dark), responsive layout, empty / loading / error states
 
-## Remaining (not in Phase 1)
-- Phase 2: daily update form, history, edit window, revision history (original submission status preserved), manager team-updates view, My Updates / Team Updates / Reports navigation
-- Phase 3: AI summaries (Anthropic default, OpenAI supported), weekly reports, manager review
+## Phase 2 checklist
+- [x] Schema + migration (updates, items, links, revisions) with tenant-safe composite foreign keys
+- [x] Draft / submit / edit with edit window, late flag, one-per-day, backdating limit
+- [x] Employee dashboard (today's status, week overview, recent updates), My Updates, update form with multiple entries and links
+- [x] Manager/admin Team Updates: cards, trend chart, filters, table, detail, version history, raw highlights
+- [x] Source-channel ingest abstraction
+
+## Remaining
+- Phase 3: Reports navigation, AI summaries (an AI-summary column in the team table arrives with them) (Anthropic default, OpenAI supported), weekly reports, manager review
 - Phase 4: hardening pass, full E2E for updates/AI/reports, deployment polish
 - Later: viaSocket Embed integration, Slack / email / WhatsApp channels, file uploads, subscription plans
-- Known follow-ups: email-ownership verification at onboarding; admin-initiated password reset when SMTP is unavailable; audit-log viewer page; card layout for the Employees table on narrow phones
+- Known follow-ups: Team Updates caps at 500 rows (no pagination yet); admins and managers are counted among people expected to submit; the 7-day backdating limit is a constant, not a setting; email-ownership verification at onboarding; admin-initiated password reset when SMTP is unavailable; audit-log viewer page; card layout for the Employees table on narrow phones

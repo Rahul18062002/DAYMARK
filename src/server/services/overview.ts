@@ -1,6 +1,5 @@
 import { prisma } from "../db";
-import { assertCan, scopedTeamIds, type Actor } from "../policy";
-import { listMembers } from "./members";
+import { assertCan, type Actor } from "../policy";
 
 export async function adminOverview(actor: Actor) {
   assertCan(actor, "audit:read");
@@ -33,16 +32,4 @@ export async function adminOverview(actor: Actor) {
       createdAt: a.createdAt.toISOString(), metadata: a.metadata as Record<string, unknown> | null,
     })),
   };
-}
-
-export async function managerOverview(actor: Actor) {
-  const [people, teamIds] = await Promise.all([listMembers(actor, { status: "ACTIVE" }), scopedTeamIds(prisma, actor)]);
-  const teams = teamIds.length
-    ? await prisma.team.findMany({
-        where: { organizationId: actor.organizationId, id: { in: teamIds } },
-        select: { id: true, name: true, managerId: true, _count: { select: { members: true } } },
-        orderBy: { name: "asc" },
-      })
-    : [];
-  return { people, teams: teams.map((t) => ({ id: t.id, name: t.name, memberCount: t._count.members, managedByMe: t.managerId === actor.membershipId })) };
 }
