@@ -1,0 +1,264 @@
+// Daymark — Make Every Day Count.
+//
+// Tenancy model
+//  * `User` is a global *identity* (owned by Better Auth). It has no organization.
+//  * `Membership` ties a User to an Organization with a role. A user can have
+//    several memberships in future (multi-organization) without schema changes.
+//  * Every domain row carries `organizationId`. Cross-table references use
+//    composite foreign keys (id, organizationId) so the database itself rejects
+//    a row in organization A pointing at a row in organization B.
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum Role {
+  ADMIN
+  MANAGER
+  EMPLOYEE
+}
+
+enum MemberStatus {
+  ACTIVE
+  DEACTIVATED
+}
+
+enum InvitationStatus {
+  PENDING
+  ACCEPTED
+  REVOKED
+}
+
+// ───────────────────────── Identity (Better Auth) ─────────────────────────
+
+model User {
+  id            String   @id
+  name          String
+  email         String   @unique
+  emailVerified Boolean  @default(false)
+  image         String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  sessions    Session[]
+  accounts    Account[]
+  memberships Membership[]
+}
+
+model Session {
+  id        String   @id
+  expiresAt DateTime
+  token     String   @unique
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  ipAddress String?
+  userAgent String?
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+// Credentials (hashed password) live here, never in ordinary application tables.
+model Account {
+  id                    String    @id
+  accountId             String
+  providerId            String
+  userId                String
+  user                  User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  accessToken           String?
+  refreshToken          String?
+  idToken               String?
+  accessTokenExpiresAt  DateTime?
+  refreshTokenExpiresAt DateTime?
+  scope                 String?
+  password              String?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  @@index([userId])
+}
+
+model Verification {
+  id         String   @id
+  identifier String
+  value      String
+  expiresAt  DateTime
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([identifier])
+}
+
+// Better Auth's built-in rate limiter, stored in the database so limits hold
+// across serverless instances (Vercel).
+model RateLimit {
+  id          String @id
+  key         String @unique
+  count       Int
+  lastRequest BigInt
+}
+
+// Small fixed-window limiter for Daymark's own public endpoints.
+model RequestThrottle {
+  key         String   @id
+  count       Int
+  windowStart DateTime
+}
+
+// ───────────────────────── Organizations ─────────────────────────
+
+model Organization {
+  id        String   @id @default(cuid())
+  name      String
+  logoUrl   String?
+  timezone  String   @default("UTC")
+  // Reserved for future subscription plans. No billing logic in the MVP.
+  plan      String   @default("free")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  settings    OrgSettings?
+  departments Department[]
+  teams       Team[]
+  memberships Membership[]
+  invitations Invitation[]
+  teamAccess  ManagerTeamAccess[]
+  auditLogs   AuditLog[]
+}
+
+model OrgSettings {
+  organizationId  String       @id
+  organization    Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  // Local time (organization timezone) after which a daily update is considered late.
+  updateCutoffTime String      @default("18:00")
+  // Hours after submission during which an employee may edit their update.
+  editWindowHours  Int         @default(24)
+  // ISO weekdays 1 (Mon) … 7 (Sun) on which updates are expected.
+  workingDays      Int[]       @default([1, 2, 3, 4, 5])
+  aiEnabled        Boolean     @default(true)
+  updatedAt        DateTime    @updatedAt
+}
+
+model Department {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  name           String
+  createdAt      DateTime     @default(now())
+
+  teams   Team[]
+  members Membership[]
+
+  @@unique([id, organizationId])
+  @@unique([organizationId, name])
+}
+
+model Team {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  departmentId   String?
+  department     Department?  @relation(fields: [departmentId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  name           String
+  managerId      String?
+  manager        Membership?  @relation("TeamManager", fields: [managerId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  createdAt      DateTime     @default(now())
+
+  members      Membership[]        @relation("MemberTeam")
+  accessGrants ManagerTeamAccess[]
+
+  @@unique([id, organizationId])
+  @@unique([organizationId, name])
+  @@index([organizationId, managerId])
+}
+
+model Membership {
+  id             String       @id @default(cuid())
+  userId         String
+  user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  role           Role
+  status         MemberStatus @default(ACTIVE)
+  jobTitle       String?
+  departmentId   String?
+  department     Department?  @relation(fields: [departmentId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  teamId         String?
+  team           Team?        @relation("MemberTeam", fields: [teamId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  managerId      String?
+  manager        Membership?  @relation("Manager", fields: [managerId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  deactivatedAt  DateTime?
+
+  directReports Membership[]        @relation("Manager")
+  managedTeams  Team[]              @relation("TeamManager")
+  teamAccess    ManagerTeamAccess[]
+  invitationsSent Invitation[]
+
+  @@unique([userId, organizationId])
+  @@unique([id, organizationId])
+  @@index([organizationId, status])
+  @@index([organizationId, teamId])
+  @@index([organizationId, managerId])
+  @@index([userId])
+}
+
+// Explicit extra access: a manager may be authorized to view teams they do not
+// manage directly. Managers never see anything outside their scope otherwise.
+model ManagerTeamAccess {
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  membershipId   String
+  membership     Membership   @relation(fields: [membershipId, organizationId], references: [id, organizationId], onDelete: Cascade)
+  teamId         String
+  team           Team         @relation(fields: [teamId, organizationId], references: [id, organizationId], onDelete: Cascade)
+  createdAt      DateTime     @default(now())
+
+  @@id([membershipId, teamId])
+  @@index([organizationId, teamId])
+}
+
+model Invitation {
+  id             String           @id @default(cuid())
+  organizationId String
+  organization   Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  email          String
+  role           Role
+  departmentId   String?
+  teamId         String?
+  managerId      String?
+  // SHA-256 of the invitation token. The raw token is only ever in the link.
+  tokenHash      String           @unique
+  status         InvitationStatus @default(PENDING)
+  expiresAt      DateTime
+  invitedById    String
+  invitedBy      Membership       @relation(fields: [invitedById, organizationId], references: [id, organizationId], onDelete: Restrict)
+  acceptedAt     DateTime?
+  createdAt      DateTime         @default(now())
+
+  @@index([organizationId, status])
+  @@index([organizationId, email])
+}
+
+model AuditLog {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  // Acting user (identity). Kept even if the membership is later deactivated.
+  userId         String?
+  action         String
+  entityType     String
+  entityId       String?
+  metadata       Json?
+  createdAt      DateTime     @default(now())
+
+  @@index([organizationId, createdAt])
+  @@index([organizationId, entityType, entityId])
+}
