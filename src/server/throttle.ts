@@ -19,6 +19,4 @@ export async function throttle(key: string, limit: number, windowSeconds: number
   if (Number(rows[0]?.count ?? 0) > limit) throw tooMany();
 }
 
-export function clientIp(headers: Headers): string {
-  return headers.get("x-forwarded-for")?.split(",")[0]?.trim() || headers.get("x-real-ip") || "unknown";
-}
+export { clientIpFrom as clientIp } from "./client-ip";

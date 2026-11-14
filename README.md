@@ -77,7 +77,12 @@ Copy `.env.test.example` to `.env.test` (it points at `.tmp-sqlite/test.db`, rec
 * SQLite specifics handled in code: working days are stored as `"1,2,3,4,5"` (`src/lib/working-days.ts`); an update's day is a `YYYY-MM-DD` string; PostgreSQL advisory locks became a lease table (`JobLock`); name/email search is case-insensitive for ASCII only.
 
 ## Deploying to Embarko
-Deployment notes are being finalised in a later step (diagnostics, memory and schedules are being verified on the platform first). See `embarko-plan.md`.
+Daymark is hosted only on Embarko (one process, 256 MB, SQLite under `DATA_DIR`). Findings, measurements and limitations: [docs/embarko-diagnostics-report.md](docs/embarko-diagnostics-report.md); the plan: [embarko-plan.md](embarko-plan.md).
+
+* Upload the source (without `node_modules`, `.next`, `.env*`, tests). Embarko runs `npm run build` (`prisma generate`, `next build`, standalone copy) and `npm start` (`scripts/start.mjs`: safe migration, then the single Next.js process).
+* `embarko.json` holds the app id and the scheduler entries (`CRON_SECRET` is created by Embarko; scheduled routes check it).
+* Secrets go in Embarko's environment (App setup), never in the upload: `BETTER_AUTH_SECRET`, `BETTER_AUTH_URL`, `NEXT_PUBLIC_APP_URL`, optional `VIASOCKET_*`, `SMTP_*`, AI keys.
+* `TRUSTED_PROXY_HOPS` (default `1`): how many proxies of the platform sit in front of the app; used to find the real client address for rate limits without trusting spoofable headers.
 
 ## Daily updates (Phase 2)
 * **Update model:** one `DailyUpdate` per person per day (`@@unique(membershipId, updateDate)`). Content is stored as free-text entries per section (`UpdateItem`: worked on, completed, pending, blockers, next priorities), so a single natural-language paragraph and a long list are both valid. Links are stored in `UpdateAttachment` (http/https only; file uploads can reuse the table later).

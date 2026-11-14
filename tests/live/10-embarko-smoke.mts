@@ -80,21 +80,22 @@ check("scheduler route refuses a wrong secret (401)", cronBad.status === 401, St
 const m1 = await mem(); if (m1) show("after functional tests", m1);
 const sessions = [mgr.c, A.admin, ...emps.map((e) => e.c)];
 const paths = ["/dashboard", "/team-updates", "/my-updates", "/automations", "/settings", "/people"];
-let ok = 0, bad2 = 0; const lat: number[] = [];
+const errs = new Map<string, number>(); let ok = 0, bad2 = 0; const lat: number[] = [];
 const DURATION = Number(process.env.LOAD_SECONDS ?? 90), CONC = Number(process.env.LOAD_CONC ?? 12);
 const end = Date.now() + DURATION * 1000; let peakSeen = m1?.cur ?? 0; const samples: any[] = [];
 async function worker(w: number) {
   while (Date.now() < end) {
     const s = sessions[(w + ok) % sessions.length], p = paths[(w + ok + bad2) % paths.length];
     const t = Date.now();
-    const r = await fetch(`${BASE}${p}`, { headers: { cookie: s.cookie }, redirect: "manual" }).catch(() => null);
-    if (r && r.status < 500) { ok++; await r.arrayBuffer(); } else bad2++;
+    let why = ""; const r = await fetch(`${BASE}${p}`, { headers: { cookie: s.cookie }, redirect: "manual" }).catch((e) => { why = String(e?.cause?.code ?? e?.cause?.message ?? e?.message); return null; });
+    if (r && r.status < 500) { ok++; await r.arrayBuffer(); } else { bad2++; const k = `${p} ${r ? r.status : "network-error:" + why}`; errs.set(k, (errs.get(k) ?? 0) + 1); }
     lat.push(Date.now() - t);
   }
 }
 const sampler = (async () => { while (Date.now() < end) { await sleep(5000); const m = await mem(); if (m) { samples.push(m); peakSeen = Math.max(peakSeen, m.cur, m.peak); } } })();
 await Promise.all([...Array.from({ length: CONC }, (_, w) => worker(w)), sampler]);
 lat.sort((a, b) => a - b);
+if (errs.size) console.log("LOAD errors by path/status:", JSON.stringify([...errs]));
 console.log(`LOAD ${DURATION}s, ${CONC} concurrent: ${ok} ok, ${bad2} errors, p50 ${lat[Math.floor(lat.length * 0.5)]}ms p95 ${lat[Math.floor(lat.length * 0.95)]}ms`);
 const m2 = await mem(); if (m2) show("end of load", m2);
 if (samples.length) console.log("MEM samples (cgroup MB):", samples.map((s) => s.cur).join(" "));

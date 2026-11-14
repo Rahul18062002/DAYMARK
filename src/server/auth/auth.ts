@@ -1,4 +1,5 @@
 import { hashPassword, verifyPassword } from "./password";
+import { CLIENT_IP_HEADER } from "../client-ip";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { betterAuth } from "better-auth";
 import { prismaAdapter } from "better-auth/adapters/prisma";
@@ -29,6 +30,8 @@ function create() {
     baseURL: appUrl(),
     secret: env().BETTER_AUTH_SECRET,
     trustedOrigins: [appUrl()],
+    // Rate limits key on the client address Daymark computes from the proxy chain (see client-ip.ts).
+    advanced: { ipAddress: { ipAddressHeaders: [CLIENT_IP_HEADER] } },
     database: prismaAdapter(prisma, { provider: "sqlite" }),
     emailAndPassword: {
       enabled: true,

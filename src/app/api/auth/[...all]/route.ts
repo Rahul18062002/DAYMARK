@@ -1,5 +1,6 @@
 import { toNextJsHandler } from "better-auth/next-js";
 import { auth } from "@/server/auth/auth";
+import { CLIENT_IP_HEADER, clientIpFrom } from "@/server/client-ip";
 
 /**
  * Only the Better Auth endpoints Daymark actually uses are reachable over HTTP.
@@ -26,9 +27,16 @@ const h = () => (handlers ??= toNextJsHandler(auth.handler));
 
 const notFound = () => Response.json({ error: { code: "NOT_FOUND", message: "Not found." } }, { status: 404 });
 
+/** Better Auth rate-limits per client address; give it one we computed (a client-sent value is overwritten). */
+function withClientIp(req: Request) {
+  const headers = new Headers(req.headers);
+  headers.set(CLIENT_IP_HEADER, clientIpFrom(req.headers));
+  return new Request(req, { headers });
+}
+
 export async function GET(req: Request) {
-  return isAllowed(new URL(req.url).pathname) ? h().GET(req) : notFound();
+  return isAllowed(new URL(req.url).pathname) ? h().GET(withClientIp(req)) : notFound();
 }
 export async function POST(req: Request) {
-  return isAllowed(new URL(req.url).pathname) ? h().POST(req) : notFound();
+  return isAllowed(new URL(req.url).pathname) ? h().POST(withClientIp(req)) : notFound();
 }

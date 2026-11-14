@@ -11,4 +11,7 @@ if (!result.ok) {
 }
 process.env.HOSTNAME = "0.0.0.0"; // containers set HOSTNAME to their own id; the platform proxy needs all interfaces
 process.env.PORT ||= "3000";
+// The platform proxy reuses upstream connections; Node closes idle ones after 5 s by default, which shows up as
+// random connection resets (measured: ~0.6% of requests). Keep them open longer than any proxy idle timeout.
+process.env.KEEP_ALIVE_TIMEOUT ||= "65000";
 await import(path.join(root, ".next/standalone/server.js"));

@@ -2,6 +2,8 @@
 // Returns only memory and process figures: never environment values.
 import fs from "node:fs";
 import v8 from "node:v8";
+import Database from "better-sqlite3";
+import { databaseFile } from "@/server/db-path";
 import { timingSafeEqual } from "node:crypto";
 
 export const dynamic = "force-dynamic";
@@ -39,8 +41,19 @@ export async function GET(req: Request) {
   for (const m of maps) byPath.set(m.path.replace(/\/[^/]*$/, "/…") || m.path, (byPath.get(m.path.replace(/\/[^/]*$/, "/…") || m.path) ?? 0) + m.anonMB);
   const hs = v8.getHeapStatistics();
   const spaces = v8.getHeapSpaceStatistics().map((x) => ({ space: x.space_name, usedMB: +(x.space_used_size / 1048576).toFixed(1), committedMB: +(x.physical_space_size / 1048576).toFixed(1) }));
+  // Table names only (does the platform add its own bookkeeping tables to our file?) and the file sizes.
+  let tables: string[] = [], files: Record<string, number> = {};
+  try {
+    const f = databaseFile(); const db = new Database(f, { readonly: true });
+    tables = (db.prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name").all() as { name: string }[]).map((t) => t.name).filter((n) => n.startsWith("_"));
+    db.close();
+    for (const suffix of ["", "-wal", "-shm"]) { try { files[`daymark.db${suffix}`] = +(fs.statSync(f + suffix).size / 1048576).toFixed(2); } catch { /* absent */ } }
+  } catch { /* ignore */ }
   const mu = process.memoryUsage();
   return Response.json({
+    // proxy headers that identify the client (names and values of forwarding headers only; no cookies or auth)
+    proxyHeaders: Object.fromEntries([...req.headers].filter(([k]) => /^(x-forwarded-|x-real-ip|forwarded|cf-connecting|true-client|x-client|fly-client|via)/i.test(k))),
+    sqlite: { underscoreTables: tables, filesMB: files },
     now: new Date().toISOString(), uptimeS: Math.round(process.uptime()), node: process.version,
     cgroup: { currentMB: cur ? +(Number(cur) / 1048576).toFixed(1) : null, peakMB: peak ? +(Number(peak) / 1048576).toFixed(1) : null, limitMB: max && /^\d+$/.test(max) ? +(Number(max) / 1048576).toFixed(1) : null, anonMB: mb("anon"), fileMB: mb("file"), kernelMB: mb("kernel"), slabMB: mb("slab") },
     process: { rssMB: +(mu.rss / 1048576).toFixed(1), heapUsedMB: +(mu.heapUsed / 1048576).toFixed(1), heapTotalMB: +(mu.heapTotal / 1048576).toFixed(1), externalMB: +(mu.external / 1048576).toFixed(1), arrayBuffersMB: +(mu.arrayBuffers / 1048576).toFixed(1) },
