@@ -1,6 +1,6 @@
-# Daymark × viaSocket — implementation plan (awaiting approval)
+# Daymark × viaSocket — implementation plan
 
-Status: **PLAN ONLY. No integration code has been written.** Skill version read: `2026-11-11.1`
+Status: **Approved and implemented** — see "As built" below for what changed from this plan after real-connection testing. Skill version read: `2026-11-11.1`
 (pointer installed at `.claude/skills/viasocket-integrations/SKILL.md`; the live skill and every page below
 were fetched and read to their `END OF PAGE` line on 2026-11-13).
 
@@ -238,3 +238,21 @@ daily-only plan the missing-update reminder could only run once a day.
 
 Daymark actions (Get Employee Details, …), inbound webhooks/API, report triggers (Phase 3), publishing Daymark as a
 viaSocket app/connector, AI-written messages, deploying anything.
+
+## As built — deviations from this plan, and why
+
+* **Retry timing** is as planned (attempts 1 now, then ≥5 min, 30 min, 2 h, 6 h), executed by the 15-minute cron sweep. The
+  sweep now has a **45 s time budget** and releases leases it did not start (Vercel's function limit is 60 s).
+* **Drafts:** viaSocket reports an unpublished flow as `drafted`. Those are stored as `draft`, hidden from the page and never
+  receive events until published. (Found live: abandoned builder sessions create them.)
+* **How users start a flow:** in this embed configuration the start screen offers apps, *HTTP/API Request* (an outbound call
+  step, not a trigger), *Custom Logic (JS)* and *Add Custom Automation*. Daymark's webhook is the trigger implicitly. So the page
+  offers a **Slack quick start per event** that opens the builder at Slack with that event's synthetic sample data
+  (`open({ serviceId, dummy_payload, meta })`); other apps use "Add new Automation" and the field reference. The `service_id`
+  lookup is best-effort and can never stop the builder loading.
+* **Stale-response guard:** a background sync that was overtaken by an admin's change is discarded and repeated.
+* **Observed in the wild:** one delivery hit the 8 s timeout although viaSocket then executed the request about a second later —
+  the retry therefore produced a real duplicate (same `eventId`, `attempt: 2`). This is the documented at-least-once behaviour;
+  flows that must not act twice should remember `eventId`. Daymark guarantees a stable ID, not exactly-once.
+* **Not done on purpose:** a tested dedupe recipe (viaSocket's Memory action needs its own connection — outside the approved
+  scope), `embed.update(...)` (Daymark never calls it; default configuration).

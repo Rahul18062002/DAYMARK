@@ -18,12 +18,13 @@ type Delivery = {
 type Attempt = { attemptNumber: number; startedAt: string; durationMs: number; outcome: string; httpStatus: number | null; errorCode: string | null; errorMessage: string | null };
 type EventDoc = { key: string; label: string; description: string; name: string; fields: FieldDoc[] };
 
+type EmbedInstance = { on: (e: string, fn: (d: unknown) => void) => void; update: (c: Record<string, unknown>) => void; open: (flowId?: string, options?: Record<string, unknown>) => void; destroy: () => void };
 const EMBED_ORIGIN = "https://embedfrontend.viasocket.com";
 const EMBED_SCRIPT = "https://embed.viasocket.com/prod-embedcomponent.js";
 
 declare global {
   interface Window {
-    viaSocket?: { mount: (o: Record<string, unknown>) => { on: (e: string, fn: (d: unknown) => void) => void; update: (c: Record<string, unknown>) => void; destroy: () => void } };
+    viaSocket?: { mount: (o: Record<string, unknown>) => EmbedInstance };
   }
 }
 
@@ -44,7 +45,7 @@ const deliveryLabel = { DELIVERED: "Accepted by viaSocket", PENDING: "Pending / 
 const when = (iso: string) => new Date(iso).toLocaleString("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
 
 export function AutomationsClient(p: {
-  configured: boolean; isAdmin: boolean; settings: { managerAccess: boolean; includeBlockerText: boolean };
+  configured: boolean; samples: Record<string, unknown>; isAdmin: boolean; settings: { managerAccess: boolean; includeBlockerText: boolean };
   initialFlows: Flow[]; initialDeliveries: Delivery[]; events: EventDoc[];
 }) {
   const [flows, setFlows] = useState(p.initialFlows);
@@ -63,11 +64,13 @@ export function AutomationsClient(p: {
 }
 
 function Configured(p: {
-  isAdmin: boolean; events: EventDoc[]; flows: Flow[]; setFlows: (f: Flow[]) => void; deliveries: Delivery[]; setDeliveries: (d: Delivery[]) => void;
+  samples: Record<string, unknown>; isAdmin: boolean; events: EventDoc[]; flows: Flow[]; setFlows: (f: Flow[]) => void; deliveries: Delivery[]; setDeliveries: (d: Delivery[]) => void;
   settings: { managerAccess: boolean; includeBlockerText: boolean }; setSettings: (s: { managerAccess: boolean; includeBlockerText: boolean }) => void;
 }) {
   const [embedState, setEmbedState] = useState<"loading" | "ready" | "error">("loading");
   const [attempt, setAttempt] = useState(0);
+  const embedRef = useRef<EmbedInstance | null>(null);
+  const [slackServiceId, setSlackServiceId] = useState<string | null>(null);
   const [syncing, setSyncing] = useState(false);
   const syncTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Bumped by every local change (e.g. linking a flow). A server response that was requested BEFORE the
@@ -125,10 +128,13 @@ function Configured(p: {
           config: { pageheading: "Automation", pagesubheading: "Connect an app, then build what should happen.", themeJson: { "--primary-color": "#4f46e5" } },
         });
         embed = e;
+        embedRef.current = e;
         e.on("ready", () => !cancelled && setEmbedState("ready"));
         e.on("error", () => !cancelled && setEmbedState("error"));
         setTimeout(() => !cancelled && setEmbedState((s) => (s === "loading" ? "ready" : s)), 6000);
         void sync();
+        // Best effort: the Slack quick start needs the app's service_id. If this lookup fails the builder still works.
+        api<{ serviceIds: Record<string, string> }>("/api/viasocket/token?apps=slack").then((r) => !cancelled && setSlackServiceId(r.serviceIds?.slack ?? null)).catch(() => undefined);
       } catch {
         if (!cancelled) setEmbedState("error");
       }
@@ -137,6 +143,7 @@ function Configured(p: {
       cancelled = true;
       window.removeEventListener("message", onMessage);
       if (syncTimer.current) clearTimeout(syncTimer.current);
+      embedRef.current = null;
       try { embed?.destroy(); } catch { /* ignore */ }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -145,7 +152,17 @@ function Configured(p: {
   return (
     <div className="space-y-6">
       <Card>
-        <CardHeader title="Build an automation" description="Connect an app, choose a starting point, map the Daymark fields into the message, test it and publish. Then link it to a Daymark event below." />
+        <CardHeader title="Build an automation" description="Pick the Daymark event you're building for, then choose an app and an action, connect it, write your message using Daymark's fields, test it and publish. Then link it to that event below." />
+        {slackServiceId && (
+          <div className="flex flex-wrap items-center gap-2 border-b border-border px-5 py-3" role="group" aria-label="Quick start with Slack for a Daymark event">
+            <span className="text-sm text-muted">Quick start with Slack for:</span>
+            {p.events.map((ev) => (
+              <Button key={ev.key} size="sm" variant="secondary" disabled={embedState !== "ready"}
+                onClick={() => embedRef.current?.open(undefined, { serviceId: slackServiceId, dummy_payload: p.samples[ev.key], meta: ev.key })}>{ev.label}</Button>
+            ))}
+            <span className="basis-full text-xs text-muted">Another app? Use “Add new Automation” in the builder. The fields each event sends are listed under “What each event sends”.</span>
+          </div>
+        )}
         <div className="relative">
           <div id="viasocket-embed" data-testid="viasocket-embed" className="h-[640px] w-full" />
           {embedState === "loading" && <div className="absolute inset-0 flex items-center justify-center bg-surface/70 text-sm text-muted" role="status">Loading automation builder…</div>}

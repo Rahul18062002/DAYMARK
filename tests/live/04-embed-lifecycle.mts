@@ -95,6 +95,13 @@ check("[embed 5] a flow paused in the real UI reached the listener as `paused`",
 await row.getByText("paused", { exact: true }).waitFor({ timeout: 30_000 });
 check("Daymark marked it paused and disabled 'Send test event'", await row.getByRole("button", { name: "Send test event" }).isDisabled());
 
+// Quick start: the page opens the real builder at Slack, carrying the event's synthetic sample data
+const quick = page.getByRole("group", { name: "Quick start with Slack for a Daymark event" });
+await quick.waitFor({ timeout: 30_000 });
+await quick.getByRole("button", { name: "Employee Reports a Blocker" }).click();
+await until("slack actions shown", async () => /Send Message/.test(await frame().locator("body").innerText().catch(() => "")), 30_000, 1000);
+check("quick start opens the real builder at Slack's actions", /\/service\/rowbu58rc/.test(frame().url()));
+
 // clean up the flow we made
 await viasocket.user(ID).deleteFlow(published.id);
 await new Daymark().signIn(state("admin_email"), state("pw")).then((d) => d.req("POST", "/api/automations/sync", {}));
