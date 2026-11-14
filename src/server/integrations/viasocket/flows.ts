@@ -13,7 +13,8 @@ import { z } from "zod";
 
 type A = Actor & { userId: string };
 
-const normalizeStatus = (s: string): string => (["active", "paused", "deleted"].includes(s) ? s : "unknown");
+// viaSocket reports an unpublished flow as "drafted"; it can't receive events and means nothing to an admin yet.
+const normalizeStatus = (s: string): string => (s === "drafted" ? "draft" : ["active", "paused", "deleted"].includes(s) ? s : "unknown");
 
 /**
  * Re-read the organization's flows from viaSocket (server-side, for the SESSION's organization
@@ -51,7 +52,7 @@ export async function syncFlows(actor: A) {
 export async function listFlowsForOrg(actor: Actor) {
   await assertAutomationsAccess(actor);
   const rows = await prisma.automationFlow.findMany({
-    where: { organizationId: actor.organizationId, status: { not: "deleted" } },
+    where: { organizationId: actor.organizationId, status: { notIn: ["deleted", "draft"] } },
     orderBy: { createdAt: "asc" },
     select: { id: true, title: true, description: true, status: true, eventType: true, lastSyncedAt: true },
   });

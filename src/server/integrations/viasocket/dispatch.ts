@@ -184,11 +184,15 @@ export async function deliverPendingForEvent(integrationEventId: string, deps: D
  * Cron sweep: lease due deliveries with FOR UPDATE SKIP LOCKED (two instances never get the same
  * row), then process each. Concurrency is small and bounded.
  */
-export async function sweepDeliveries(opts: { limit?: number } = {}, deps: Deps = {}): Promise<{ processed: number; results: Record<string, number> }> {
+export async function sweepDeliveries(opts: { limit?: number; budgetMs?: number } = {}, deps: Deps = {}): Promise<{ processed: number; released: number; results: Record<string, number> }> {
   deps = { ...testDeps, ...deps };
   const now = deps.now?.() ?? new Date();
   const lease = new Date(now.getTime() + LEASE_MS);
-  const limit = opts.limit ?? 100;
+  const limit = opts.limit ?? 50;
+  // A cron invocation has a hard duration limit (60 s). Stop taking new work after the budget and
+  // hand back what was leased but not started, so the next pass picks it up immediately.
+  const budgetMs = opts.budgetMs ?? 45_000;
+  const startedAt = Date.now();
   const ids = await prisma.$queryRaw<{ id: string }[]>`
     UPDATE "IntegrationDelivery" SET "lockedUntil" = ${lease}
     WHERE "id" IN (
@@ -199,15 +203,21 @@ export async function sweepDeliveries(opts: { limit?: number } = {}, deps: Deps 
 
   const results: Record<string, number> = {};
   const queue = ids.map((r) => r.id);
+  let processed = 0;
   const worker = async () => {
-    for (let id = queue.shift(); id; id = queue.shift()) {
+    while (Date.now() - startedAt < budgetMs) {
+      const id = queue.shift();
+      if (!id) return;
       // Already leased by this sweep, so go straight to the claimed path.
       const r = await runClaimed(id, now, deps).catch(() => ({ deliveryId: id, status: "FAILED" as const }));
+      processed++;
       results[r.status] = (results[r.status] ?? 0) + 1;
     }
   };
-  await Promise.all(Array.from({ length: Math.min(4, queue.length) }, worker));
-  return { processed: ids.length, results };
+  await Promise.all(Array.from({ length: Math.min(4, Math.max(queue.length, 1)) }, worker));
+  const unstarted = queue.splice(0);
+  if (unstarted.length) await prisma.integrationDelivery.updateMany({ where: { id: { in: unstarted }, status: "PENDING" }, data: { lockedUntil: null } });
+  return { processed, released: unstarted.length, results };
 }
 
 /** Retention: clear payloads after 30 days; drop events (and their history) after 180. */

@@ -70,19 +70,30 @@ function Configured(p: {
   const [attempt, setAttempt] = useState(0);
   const [syncing, setSyncing] = useState(false);
   const syncTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Bumped by every local change (e.g. linking a flow). A server response that was requested BEFORE the
+  // latest change is stale and must not overwrite what the admin just did.
+  const mutation = useRef(0);
 
   const refresh = useCallback(async () => {
+    const seen = mutation.current;
     const r = await api<{ flows: Flow[]; deliveries: Delivery[] }>("/api/automations");
-    p.setFlows(r.flows); p.setDeliveries(r.deliveries);
+    p.setDeliveries(r.deliveries);
+    if (seen === mutation.current) p.setFlows(r.flows);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const sync = useCallback(async (manual = false) => {
+  const sync = useCallback(async (manual = false): Promise<void> => {
     setSyncing(true);
+    const seen = mutation.current;
     try {
       const r = await api<{ flows: Flow[] }>("/api/automations/sync", { method: "POST", body: {} });
-      p.setFlows(r.flows);
-      if (manual) toast.success("Automations refreshed");
+      if (seen === mutation.current) {
+        p.setFlows(r.flows);
+        if (manual) toast.success("Automations refreshed");
+      } else {
+        // Overtaken by a local change: discard this answer and ask again.
+        setTimeout(() => void sync(manual), 300);
+      }
     } catch (e) {
       if (manual) toast.error(e instanceof ApiError ? e.message : "Couldn't refresh automations.");
     } finally { setSyncing(false); }
@@ -151,7 +162,7 @@ function Configured(p: {
         </div>
       </Card>
 
-      <FlowsCard events={p.events} flows={p.flows} setFlows={p.setFlows} syncing={syncing} onSync={() => sync(true)} onTested={refresh} />
+      <FlowsCard events={p.events} flows={p.flows} setFlows={p.setFlows} syncing={syncing} onSync={() => sync(true)} onTested={refresh} onMutate={() => { mutation.current++; }} />
       {p.isAdmin && <SettingsCard settings={p.settings} setSettings={p.setSettings} />}
       <DeliveriesCard deliveries={p.deliveries} onRefresh={refresh} />
       <EventDocs events={p.events} />
@@ -159,10 +170,11 @@ function Configured(p: {
   );
 }
 
-function FlowsCard(p: { events: EventDoc[]; flows: Flow[]; setFlows: (f: Flow[]) => void; syncing: boolean; onSync: () => void; onTested: () => Promise<void> }) {
+function FlowsCard(p: { events: EventDoc[]; flows: Flow[]; setFlows: (f: Flow[]) => void; syncing: boolean; onSync: () => void; onTested: () => Promise<void>; onMutate: () => void }) {
   const [busy, setBusy] = useState<string | null>(null);
 
   async function link(flow: Flow, eventType: string) {
+    p.onMutate();
     setBusy(flow.id);
     try {
       await api(`/api/automations/flows/${flow.id}`, { method: "PATCH", body: { eventType: eventType || null } });

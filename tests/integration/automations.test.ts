@@ -449,6 +449,25 @@ describe("F. Duplicate-safe processing (concurrency, leases, repeats)", () => {
     expect(await prisma.integrationDelivery.count({ where: { organizationId, status: "DELIVERED" } })).toBe(30);
   });
 
+  it("a sweep stops taking new work at its time budget and releases what it didn't start (cron has a hard duration limit)", async () => {
+    const { organizationId } = await makeOrg();
+    await makeFlow(organizationId, "UPDATE_SUBMITTED");
+    const ids: string[] = [];
+    for (let i = 0; i < 12; i++) ids.push((await makeEvent(organizationId, "UPDATE_SUBMITTED")).deliveries[0].id);
+    const slow = (async () => { await new Promise((r) => setTimeout(r, 120)); return new Response("", { status: 200 }); }) as unknown as typeof fetch;
+    const r = await sweepDeliveries({ limit: 100, budgetMs: 60 }, { fetch: slow, now: () => NOW });
+    expect(r.processed).toBeGreaterThanOrEqual(1);
+    expect(r.processed).toBeLessThan(12);
+    expect(r.released).toBe(12 - r.processed);
+    const rows = await prisma.integrationDelivery.findMany({ where: { organizationId } });
+    expect(rows.filter((d) => d.status === "DELIVERED")).toHaveLength(r.processed);
+    expect(rows.filter((d) => d.status === "PENDING" && d.lockedUntil === null)).toHaveLength(12 - r.processed); // released, not stuck behind a lease
+    // …and the next pass finishes the rest.
+    const next = await sweepDeliveries({ limit: 100, budgetMs: 10_000 }, { fetch: fakeFetch([200]).fetch, now: () => NOW });
+    expect(next.processed).toBe(12 - r.processed);
+    expect(await prisma.integrationDelivery.count({ where: { organizationId, status: "DELIVERED" } })).toBe(12);
+  });
+
   it("an in-flight lease blocks other workers; an expired lease (crashed worker) lets it be retried — at-least-once", async () => {
     const { organizationId } = await makeOrg();
     await makeFlow(organizationId, "UPDATE_SUBMITTED");
@@ -626,6 +645,18 @@ describe("H. Access, sync, linking, test events and organization isolation", () 
     setGatewayForTests(fakeGateway({}));
     expect(await syncFlows(A.admin)).toEqual([]);
     expect((await prisma.automationFlow.findFirstOrThrow({ where: { organizationId: A.organizationId } })).status).toBe("deleted");
+  });
+
+  it("unpublished (drafted) flows are not listed and never receive events, until they are published", async () => {
+    const A = await makeOrg();
+    setGatewayForTests(fakeGateway({ [`daymark-org-${A.organizationId}`]: [sf("d1x", "Half-built", "drafted"), sf("a1x", "Live one", "active")] }));
+    expect((await syncFlows(A.admin)).map((f) => f.title)).toEqual(["Live one"]);
+    const draft = await prisma.automationFlow.findFirstOrThrow({ where: { organizationId: A.organizationId, title: "Half-built" } });
+    expect(draft.status).toBe("draft");
+    await prisma.automationFlow.update({ where: { id: draft.id }, data: { eventType: "UPDATE_SUBMITTED" } });
+    expect((await enqueueEvent({ organizationId: A.organizationId, type: "UPDATE_SUBMITTED", eventKey: "draft-test", payload: samplePayloadFor("UPDATE_SUBMITTED") })).created).toBe(false);
+    setGatewayForTests(fakeGateway({ [`daymark-org-${A.organizationId}`]: [sf("d1x", "Half-built", "active")] }));
+    expect((await syncFlows(A.admin)).map((f) => f.title)).toEqual(["Half-built"]);
   });
 
   it("sync keeps the admin's event link across re-syncs", async () => {
