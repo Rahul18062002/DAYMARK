@@ -1,0 +1,7 @@
+{
+  "$schema": "https://embarko.ai/schema/embarko.json",
+  "appId": "cmwg1sx4n01ny12kfzy4qa31o",
+  "schedules": [
+    { "cron": "*/15 * * * *", "path": "/api/cron/integrations", "timezone": "UTC", "name": "integrations sweep" }
+  ]
+}

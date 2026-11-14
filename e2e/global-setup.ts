@@ -1,4 +1,4 @@
-import { execSync } from "node:child_process";
+import { resetTestDatabase } from "../tests/db-reset";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { config } from "dotenv";
 import { SMTPServer } from "smtp-server";
@@ -10,9 +10,7 @@ let server: SMTPServer | undefined;
 
 export default async function globalSetup() {
   config({ path: ".env.test", override: true });
-  execSync("npx prisma migrate deploy", { stdio: "ignore", env: { ...process.env } });
-  // Clear rate-limit state so repeated runs from the same machine don't interfere.
-  execSync(`psql "${process.env.DATABASE_URL}" -c 'TRUNCATE "RequestThrottle", "RateLimit"'`, { stdio: "ignore" });
+  resetTestDatabase(); // fresh SQLite database from the committed migrations
 
   mkdirSync("test-results", { recursive: true });
   writeFileSync(MAILBOX, "");

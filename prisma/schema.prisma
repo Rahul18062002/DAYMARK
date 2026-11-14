@@ -11,10 +11,11 @@
 generator client {
   provider = "prisma-client"
   output   = "../src/generated/prisma"
+  compilerBuild = "small"
 }
 
 datasource db {
-  provider = "postgresql"
+  provider = "sqlite"
 }
 
 enum Role {
@@ -172,8 +173,9 @@ model OrgSettings {
   updateCutoffTime String      @default("18:00")
   // Hours after submission during which an employee may edit their update.
   editWindowHours  Int         @default(24)
-  // ISO weekdays 1 (Mon) … 7 (Sun) on which updates are expected.
-  workingDays      Int[]       @default([1, 2, 3, 4, 5])
+  // ISO weekdays 1 (Mon) … 7 (Sun) on which updates are expected, comma-separated ("1,2,3,4,5").
+  // Read/write through src/lib/working-days.ts (SQLite has no list columns).
+  workingDays      String      @default("1,2,3,4,5")
   aiEnabled        Boolean     @default(true)
   // Automations (viaSocket): admins always have access; managers only when this is on.
   automationsManagerAccess     Boolean @default(false)
@@ -313,8 +315,8 @@ model DailyUpdate {
   organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   membershipId   String
   membership     Membership   @relation(fields: [membershipId, organizationId], references: [id, organizationId], onDelete: Restrict)
-  /// Calendar day the update is about (in the organization's timezone).
-  updateDate     DateTime     @db.Date
+  /// Calendar day the update is about (in the organization's timezone), as "YYYY-MM-DD".
+  updateDate     String
   status         UpdateStatus @default(DRAFT)
   source         UpdateSource @default(DASHBOARD)
   /// Denormalized from BLOCKER items for fast manager filtering. Kept in sync by the service.
@@ -502,4 +504,13 @@ model IntegrationAttempt {
 
   @@unique([deliveryId, attemptNumber])
   @@index([organizationId, startedAt])
+}
+
+/// Named lease used to keep scheduled jobs from overlapping (replaces PostgreSQL advisory locks).
+/// A holder owns the row until `lockedUntil`; an expired lease can be taken over, so a crashed run never blocks forever.
+model JobLock {
+  name        String   @id
+  owner       String
+  lockedUntil DateTime
+  updatedAt   DateTime @updatedAt
 }

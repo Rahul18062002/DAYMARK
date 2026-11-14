@@ -1,8 +1,11 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
+  // Self-contained server (.next/standalone): the smallest runtime footprint for a 256 MB host.
+  output: "standalone",
   poweredByHeader: false,
-  serverExternalPackages: ["pg", "nodemailer"],
+  images: { unoptimized: true }, // no image optimizer (sharp) in memory
+  serverExternalPackages: ["better-sqlite3", "nodemailer"],
   async headers() {
     return [
       {

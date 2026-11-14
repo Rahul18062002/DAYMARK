@@ -9,6 +9,8 @@ export default defineConfig({
   test: {
     include: ["tests/integration/**/*.test.ts"],
     globalSetup: ["tests/global-setup.ts"],
+    // One SQLite file, several test files: run files one after another (production is one process).
+    fileParallelism: false,
     testTimeout: 30_000,
     hookTimeout: 60_000,
   },

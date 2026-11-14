@@ -64,7 +64,7 @@ export async function listMembers(actor: Actor, rawFilters: unknown = {}) {
         departmentId: f.departmentId,
         teamId: f.teamId,
         ...(f.q
-          ? { user: { OR: [{ name: { contains: f.q, mode: "insensitive" } }, { email: { contains: f.q, mode: "insensitive" } }] } }
+          ? { user: { OR: [{ name: { contains: f.q } }, { email: { contains: f.q } }] } }
           : {}),
       },
     ],

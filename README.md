@@ -35,16 +35,16 @@ e2e/              Playwright end-to-end tests (real servers, real SMTP capture)
 * Roles: ADMIN (whole organization), MANAGER (managed teams + direct reports + explicit `ManagerTeamAccess` grants), EMPLOYEE (self). Rules live in `src/server/policy`.
 * No public registration: user creation is only possible inside server code (onboarding / invitation acceptance); `/api/auth/sign-up/*` is not exposed and a database hook rejects any other creation path.
 * Passwords are hashed by Better Auth (scrypt) in the auth `Account` table. Invitation tokens are stored only as SHA-256 hashes.
-* Rate limits: Better Auth's (database-backed) limiter on sign-in / reset; a PostgreSQL limiter on onboarding and invitation acceptance.
+* Rate limits: Better Auth's (database-backed) limiter on sign-in / reset; a database-backed limiter on onboarding and invitation acceptance.
 * Audit log rows are written in the same transaction as each important change.
 
 ## Setup
-Requirements: Node 22+, PostgreSQL 14+.
+Requirements: Node 22+. The database is a single SQLite file (no database server).
 
 ```bash
 npm install
-cp .env.example .env        # then edit DATABASE_URL and BETTER_AUTH_SECRET (openssl rand -base64 32)
-npx prisma migrate deploy   # apply migrations (use `npm run db:migrate` while developing)
+cp .env.example .env        # then set BETTER_AUTH_SECRET (openssl rand -base64 32); the database file is created in ./data
+node scripts/safe-migrate.mjs   # apply migrations safely (snapshot first, restore on failure)
 npm run dev                 # http://localhost:3000
 ```
 Open `/onboarding` to create the first company workspace.
@@ -52,8 +52,8 @@ Open `/onboarding` to create the first company workspace.
 ### Environment variables
 | Variable | Required | Purpose |
 |---|---|---|
-| `DATABASE_URL` | yes | PostgreSQL connection string (pooled is fine) |
-| `DIRECT_URL` | no | Non-pooled URL used only by `prisma migrate` (Neon/Supabase etc.) |
+| `DATA_DIR` | no | Folder for the SQLite file (`daymark.db`). Embarko sets it; locally it defaults to `./data`. |
+| `DATABASE_URL` | no | Optional `file:` override of the database path (tests, local) |
 | `BETTER_AUTH_SECRET` | yes | ≥32 chars. Signs sessions/tokens. |
 | `BETTER_AUTH_URL` | yes | Public base URL, no trailing slash. Must match the browser origin. |
 | `NEXT_PUBLIC_APP_URL` | yes | Same public URL |
@@ -63,19 +63,21 @@ Open `/onboarding` to create the first company workspace.
 ## Tests
 ```bash
 npm run lint                       # type-check
-npm test                           # Vitest integration tests (needs the daymark_test database, see .env.test)
+npm test                           # Vitest integration tests (fresh SQLite file per run, see .env.test)
 npm run test:e2e                   # builds, then Playwright against two real servers
 ```
-Copy `.env.test.example` to `.env.test` (it points at a database named `daymark_test`). If Playwright's own browser isn't installed, set
+Copy `.env.test.example` to `.env.test` (it points at `.tmp-sqlite/test.db`, recreated from the committed migrations on every run). If Playwright's own browser isn't installed, set
 `PW_CHROMIUM_PATH` to an installed Chromium binary.
 
-## Deploying to Vercel + managed PostgreSQL
-1. Create a managed PostgreSQL database (Neon, Supabase, Vercel Postgres, …).
-2. In Vercel, import the repo and set the environment variables above. `BETTER_AUTH_URL` / `NEXT_PUBLIC_APP_URL` = your production URL.
-   Use the pooled connection string for `DATABASE_URL` and the direct one for `DIRECT_URL`.
-3. Build command: `npm run build` (runs `prisma generate` then `next build`).
-4. Apply migrations against production before/at release: `DATABASE_URL=<direct url> npx prisma migrate deploy` (CI step or one-off).
-5. Configure SMTP (e.g. any provider with SMTP credentials) so invitations and password resets are emailed.
+## Database and migrations (SQLite)
+* The only database provider is SQLite (`better-sqlite3` through Prisma's driver adapter). WAL mode, foreign keys on; the composite `(id, organizationId)` keys still make the database itself reject cross-organization references.
+* Migrations are committed SQL files under `prisma/migrations`, applied only with `prisma migrate deploy` (via `scripts/safe-migrate.mjs`). Never use `prisma db push` or `migrate dev` against a deployed database: Embarko keeps its own bookkeeping tables in the file.
+* `scripts/safe-migrate.mjs` snapshots the database (`VACUUM INTO`) before applying pending migrations and restores the snapshot if one fails, so a bad migration cannot leave a half-migrated file.
+* The earlier PostgreSQL migrations are kept, unused, in `prisma/migrations-postgres-archive/` (git tag `pre-sqlite` is the last PostgreSQL version).
+* SQLite specifics handled in code: working days are stored as `"1,2,3,4,5"` (`src/lib/working-days.ts`); an update's day is a `YYYY-MM-DD` string; PostgreSQL advisory locks became a lease table (`JobLock`); name/email search is case-insensitive for ASCII only.
+
+## Deploying to Embarko
+Deployment notes are being finalised in a later step (diagnostics, memory and schedules are being verified on the platform first). See `embarko-plan.md`.
 
 ## Daily updates (Phase 2)
 * **Update model:** one `DailyUpdate` per person per day (`@@unique(membershipId, updateDate)`). Content is stored as free-text entries per section (`UpdateItem`: worked on, completed, pending, blockers, next priorities), so a single natural-language paragraph and a long list are both valid. Links are stored in `UpdateAttachment` (http/https only; file uploads can reuse the table later).

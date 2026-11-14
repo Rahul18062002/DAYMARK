@@ -181,8 +181,8 @@ export async function deliverPendingForEvent(integrationEventId: string, deps: D
 }
 
 /**
- * Cron sweep: lease due deliveries with FOR UPDATE SKIP LOCKED (two instances never get the same
- * row), then process each. Concurrency is small and bounded.
+ * Cron sweep: lease due deliveries with one atomic UPDATE … RETURNING (SQLite has a single writer, so
+ * two overlapping sweeps never get the same row), then process each. Concurrency is small and bounded.
  */
 export async function sweepDeliveries(opts: { limit?: number; budgetMs?: number } = {}, deps: Deps = {}): Promise<{ processed: number; released: number; results: Record<string, number> }> {
   deps = { ...testDeps, ...deps };
@@ -198,7 +198,7 @@ export async function sweepDeliveries(opts: { limit?: number; budgetMs?: number 
     WHERE "id" IN (
       SELECT "id" FROM "IntegrationDelivery"
       WHERE "status" = 'PENDING' AND "nextAttemptAt" <= ${now} AND ("lockedUntil" IS NULL OR "lockedUntil" < ${now})
-      ORDER BY "nextAttemptAt" LIMIT ${limit} FOR UPDATE SKIP LOCKED)
+      ORDER BY "nextAttemptAt" LIMIT ${limit})
     RETURNING "id"`;
 
   const results: Record<string, number> = {};

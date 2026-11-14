@@ -5,6 +5,7 @@ import type { Actor } from "../policy";
 import { assertCan } from "../policy";
 import { conflict, notFound } from "../errors";
 import { auth, withUserCreation } from "../auth/auth";
+import { formatWorkingDays, parseWorkingDays } from "@/lib/working-days";
 import { onboardingSchema, settingsSchema, updateOrganizationSchema } from "../validation";
 
 type Onboarding = z.infer<typeof onboardingSchema>;
@@ -97,12 +98,15 @@ export async function updateOrganization(actor: Actor & { userId: string }, inpu
 export async function updateSettings(actor: Actor & { userId: string }, input: unknown) {
   assertCan(actor, "org:settings");
   const data = settingsSchema.parse(input);
+  const { workingDays, ...rest } = data;
+  const row = { ...rest, ...(workingDays ? { workingDays: formatWorkingDays(workingDays) } : {}) };
   return prisma.$transaction(async (tx) => {
-    const settings = await tx.orgSettings.upsert({
+    const stored = await tx.orgSettings.upsert({
       where: { organizationId: actor.organizationId },
-      create: { organizationId: actor.organizationId, ...data },
-      update: data,
+      create: { organizationId: actor.organizationId, ...row },
+      update: row,
     });
+    const settings = { ...stored, workingDays: parseWorkingDays(stored.workingDays) };
     await audit(tx, {
       organizationId: actor.organizationId,
       userId: actor.userId,

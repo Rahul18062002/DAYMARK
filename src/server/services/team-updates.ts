@@ -3,7 +3,8 @@ import { prisma } from "../db";
 import { assertCan, visibleMembershipWhere, type Actor } from "../policy";
 import { badRequest, notFound } from "../errors";
 import { teamUpdateFilterSchema } from "../validation";
-import { addDays, daysBetween, isoWeekday, localDay, parseDay, toDayString, weekStart } from "@/lib/dates";
+import { addDays, daysBetween, isoWeekday, localDay, weekStart } from "@/lib/dates";
+import { parseWorkingDays } from "@/lib/working-days";
 import { detailInclude, toDetailDto } from "./updates";
 
 type Opts = { now?: Date };
@@ -12,7 +13,7 @@ const MAX_ROWS = 500;
 
 async function cfgOf(organizationId: string) {
   const org = await prisma.organization.findUniqueOrThrow({ where: { id: organizationId }, include: { settings: true } });
-  return { tz: org.timezone, workingDays: org.settings?.workingDays ?? [1, 2, 3, 4, 5], editWindowHours: org.settings?.editWindowHours ?? 24 };
+  return { tz: org.timezone, workingDays: parseWorkingDays(org.settings?.workingDays), editWindowHours: org.settings?.editWindowHours ?? 24 };
 }
 
 /** Members whose updates the actor may see (active only), optionally narrowed by filters. */
@@ -72,7 +73,7 @@ export async function listTeamUpdates(actor: Actor, rawFilters: unknown = {}, op
   const updates = await prisma.dailyUpdate.findMany({
     where: {
       organizationId: actor.organizationId,
-      updateDate: { gte: parseDay(from), lte: parseDay(to) },
+      updateDate: { gte: from, lte: to },
       status: f.status === "submitted" ? "SUBMITTED" : f.status === "edited" ? "EDITED" : { in: ["SUBMITTED", "EDITED"] },
       hasBlockers: f.blockers ? true : undefined,
       membership: { is: { AND: [scope, memberFilter] } },
@@ -89,7 +90,7 @@ export async function listTeamUpdates(actor: Actor, rawFilters: unknown = {}, op
     ? updates.map((u) => ({
         key: u.id, updateId: u.id, membershipId: u.membershipId, employeeName: u.membership.user.name,
         teamName: u.membership.team?.name ?? null, departmentName: u.membership.department?.name ?? null,
-        date: toDayString(u.updateDate), status: u.status as "SUBMITTED" | "EDITED", hasBlockers: u.hasBlockers,
+        date: u.updateDate, status: u.status as "SUBMITTED" | "EDITED", hasBlockers: u.hasBlockers,
         submittedLate: u.submittedLate, lastUpdatedAt: (u.lastEditedAt ?? u.firstSubmittedAt ?? u.updatedAt).toISOString(),
         preview: u.items[0]?.text ?? "",
       }))
@@ -103,10 +104,10 @@ export async function listTeamUpdates(actor: Actor, rawFilters: unknown = {}, op
       (await prisma.dailyUpdate.findMany({
         where: {
           organizationId: actor.organizationId, status: { in: ["SUBMITTED", "EDITED"] },
-          updateDate: { gte: parseDay(from), lte: parseDay(to) }, membershipId: { in: members.map((m) => m.id) },
+          updateDate: { gte: from, lte: to }, membershipId: { in: members.map((m) => m.id) },
         },
         select: { membershipId: true, updateDate: true },
-      })).map((u) => `${u.membershipId}|${toDayString(u.updateDate)}`),
+      })).map((u) => `${u.membershipId}|${u.updateDate}`),
     );
     for (const day of days) {
       if (day > today || !cfg.workingDays.includes(isoWeekday(day))) continue;
@@ -140,11 +141,11 @@ export async function teamOverview(actor: Actor, opts: Opts & { day?: string } =
 
   const [todays, weekRows] = await Promise.all([
     prisma.dailyUpdate.findMany({
-      where: { organizationId: actor.organizationId, updateDate: parseDay(day), status: { in: ["SUBMITTED", "EDITED"] }, membership: { is: { AND: [scope, { status: "ACTIVE" }] } } },
+      where: { organizationId: actor.organizationId, updateDate: day, status: { in: ["SUBMITTED", "EDITED"] }, membership: { is: { AND: [scope, { status: "ACTIVE" }] } } },
       select: { membershipId: true, hasBlockers: true },
     }),
     prisma.dailyUpdate.findMany({
-      where: { organizationId: actor.organizationId, updateDate: { gte: parseDay(weekStart(day)), lte: parseDay(day) }, status: { in: ["SUBMITTED", "EDITED"] }, membership: { is: scope } },
+      where: { organizationId: actor.organizationId, updateDate: { gte: weekStart(day), lte: day }, status: { in: ["SUBMITTED", "EDITED"] }, membership: { is: scope } },
       select: { membershipId: true },
     }),
   ]);
@@ -172,11 +173,11 @@ export async function teamTrend(actor: Actor, opts: Opts & { days?: number } = {
     scopedMembers(actor),
     prisma.dailyUpdate.groupBy({
       by: ["updateDate"],
-      where: { organizationId: actor.organizationId, updateDate: { gte: parseDay(start), lte: parseDay(end) }, status: { in: ["SUBMITTED", "EDITED"] }, membership: { is: scope } },
+      where: { organizationId: actor.organizationId, updateDate: { gte: start, lte: end }, status: { in: ["SUBMITTED", "EDITED"] }, membership: { is: scope } },
       _count: { _all: true },
     }),
   ]);
-  const counts = new Map(rows.map((r) => [toDayString(r.updateDate), r._count._all]));
+  const counts = new Map(rows.map((r) => [r.updateDate, r._count._all]));
   return daysBetween(start, end).map((d) => ({
     date: d,
     submitted: counts.get(d) ?? 0,
@@ -199,7 +200,7 @@ export async function teamHighlights(actor: Actor, opts: Opts & { days?: number;
     const rows = await prisma.updateItem.findMany({
       where: {
         organizationId: actor.organizationId, section,
-        dailyUpdate: { status: { in: ["SUBMITTED", "EDITED"] }, updateDate: { gte: parseDay(start), lte: parseDay(end) }, membership: { is: scope } },
+        dailyUpdate: { status: { in: ["SUBMITTED", "EDITED"] }, updateDate: { gte: start, lte: end }, membership: { is: scope } },
       },
       orderBy: [{ dailyUpdate: { updateDate: "desc" } }, { position: "asc" }],
       take: take * 3,
@@ -208,7 +209,7 @@ export async function teamHighlights(actor: Actor, opts: Opts & { days?: number;
     return rows
       .filter((r) => section !== "BLOCKER" || !/^(none|no|nil|n\/a|na|nothing)[.!\s]*$/i.test(r.text.trim()))
       .slice(0, take)
-      .map((r) => ({ updateId: r.dailyUpdate.id, date: toDayString(r.dailyUpdate.updateDate), employeeName: r.dailyUpdate.membership.user.name, text: r.text }));
+      .map((r) => ({ updateId: r.dailyUpdate.id, date: r.dailyUpdate.updateDate, employeeName: r.dailyUpdate.membership.user.name, text: r.text }));
   };
   const [blockers, pending, completed] = await Promise.all([q("BLOCKER"), q("PENDING"), q("COMPLETED")]);
   return { from: start, to: end, blockers, pending, completed };

@@ -6,7 +6,8 @@ import { assertCan, type Actor } from "../policy";
 import { AppError, badRequest, conflict, forbidden, notFound } from "../errors";
 import { createUpdateSchema, patchUpdateSchema } from "../validation";
 import { notifyUpdateChanged } from "../integrations/viasocket/events";
-import { addDays, isoWeekday, localDay, toDayString, parseDay, weekStart, zonedTimeToUtc } from "@/lib/dates";
+import { addDays, isoWeekday, localDay, weekStart, zonedTimeToUtc } from "@/lib/dates";
+import { parseWorkingDays } from "@/lib/working-days";
 
 type A = Actor & { userId: string };
 type Opts = { now?: Date };
@@ -41,7 +42,7 @@ async function orgContext(db: Tx | typeof prisma, organizationId: string) {
     timezone: org.timezone,
     cutoff: org.settings?.updateCutoffTime ?? "18:00",
     editWindowHours: org.settings?.editWindowHours ?? 24,
-    workingDays: org.settings?.workingDays ?? [1, 2, 3, 4, 5],
+    workingDays: parseWorkingDays(org.settings?.workingDays),
   };
 }
 
@@ -94,7 +95,7 @@ export async function createUpdate(actor: A, raw: unknown, opts: Opts & { source
     if (input.submit) assertSubmittable(content);
 
     const existing = await tx.dailyUpdate.findUnique({
-      where: { membershipId_updateDate: { membershipId: actor.membershipId, updateDate: parseDay(day) } },
+      where: { membershipId_updateDate: { membershipId: actor.membershipId, updateDate: day } },
       select: { id: true },
     });
     if (existing) throw new AppError(409, "UPDATE_EXISTS", "You already have an update for that day.", { id: existing.id });
@@ -103,7 +104,7 @@ export async function createUpdate(actor: A, raw: unknown, opts: Opts & { source
       data: {
         organizationId: actor.organizationId,
         membershipId: actor.membershipId,
-        updateDate: parseDay(day),
+        updateDate: day,
         source: opts.source ?? "DASHBOARD",
         hasBlockers: computeHasBlockers(content.sections.BLOCKER),
       },
@@ -148,7 +149,7 @@ export async function updateUpdate(actor: A, id: string, raw: unknown, opts: Opt
     const row = await tx.dailyUpdate.findFirst({ where: { id, organizationId: actor.organizationId, membershipId: actor.membershipId } });
     if (!row) throw notFound("Update");
     const cfg = await orgContext(tx, actor.organizationId);
-    const day = toDayString(row.updateDate);
+    const day = row.updateDate;
 
     const current = await loadContent(tx, actor.organizationId, id);
     const next: Content = {
@@ -248,7 +249,7 @@ export function toDetailDto(row: DetailRow, editWindowHours?: number, now: Date 
       teamName: row.membership.team?.name ?? null,
       departmentName: row.membership.department?.name ?? null,
     },
-    updateDate: toDayString(row.updateDate),
+    updateDate: row.updateDate,
     status: row.status,
     source: row.source,
     hasBlockers: row.hasBlockers,
@@ -294,7 +295,7 @@ export async function listOwnUpdates(actor: Actor, limit = 60) {
   });
   return rows.map((r) => ({
     id: r.id,
-    updateDate: toDayString(r.updateDate),
+    updateDate: r.updateDate,
     status: r.status,
     hasBlockers: r.hasBlockers,
     submittedLate: r.submittedLate,
@@ -309,7 +310,7 @@ export async function getTodayStatus(actor: Actor, opts: Opts = {}) {
   const cfg = await orgContext(prisma, actor.organizationId);
   const today = localDay(opts.now ?? new Date(), cfg.timezone);
   const row = await prisma.dailyUpdate.findUnique({
-    where: { membershipId_updateDate: { membershipId: actor.membershipId, updateDate: parseDay(today) } },
+    where: { membershipId_updateDate: { membershipId: actor.membershipId, updateDate: today } },
     select: { id: true, status: true, firstSubmittedAt: true },
   });
   return { today, timezone: cfg.timezone, cutoff: cfg.cutoff, isWorkingDay: cfg.workingDays.includes(isoWeekday(today)), update: row ? { id: row.id, status: row.status } : null };
@@ -324,10 +325,10 @@ export async function getWeekOverview(actor: Actor, opts: Opts = {}) {
   const start = weekStart(today);
   const days = Array.from({ length: 7 }, (_, i) => addDays(start, i));
   const rows = await prisma.dailyUpdate.findMany({
-    where: { organizationId: actor.organizationId, membershipId: actor.membershipId, updateDate: { gte: parseDay(days[0]), lte: parseDay(days[6]) } },
+    where: { organizationId: actor.organizationId, membershipId: actor.membershipId, updateDate: { gte: days[0], lte: days[6] } },
     select: { id: true, updateDate: true, status: true },
   });
-  const byDay = new Map(rows.map((r) => [toDayString(r.updateDate), r]));
+  const byDay = new Map(rows.map((r) => [r.updateDate, r]));
   const member = await prisma.membership.findFirst({ where: { id: actor.membershipId, organizationId: actor.organizationId }, select: { createdAt: true } });
   const joined = member ? localDay(member.createdAt, cfg.timezone) : days[0];
   const list = days.map((day) => {

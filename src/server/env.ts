@@ -1,7 +1,9 @@
 import { z } from "zod";
 
 const schema = z.object({
-  DATABASE_URL: z.string().min(1, "DATABASE_URL is required"),
+  // SQLite: optional "file:…" override. Default is $DATA_DIR/daymark.db (see db-path.ts).
+  DATABASE_URL: z.string().optional(),
+  DATA_DIR: z.string().optional(),
   BETTER_AUTH_SECRET: z.string().min(32, "BETTER_AUTH_SECRET must be at least 32 characters"),
   BETTER_AUTH_URL: z.url("BETTER_AUTH_URL must be a full URL"),
   SMTP_HOST: z.string().optional(),

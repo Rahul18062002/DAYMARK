@@ -290,7 +290,7 @@ describe("C. Access control for updates", () => {
     expect((await listTeamUpdates(other.admin, { from: DAY, to: DAY }, { now: NOW })).rows.filter((r) => r.status !== "MISSING")).toHaveLength(0);
     // …and the database refuses to attach an update to another organization's person.
     await expect(
-      prisma.dailyUpdate.create({ data: { organizationId: other.organizationId, membershipId: s.e1.membershipId, updateDate: new Date("2026-10-01T00:00:00Z") } }),
+      prisma.dailyUpdate.create({ data: { organizationId: other.organizationId, membershipId: s.e1.membershipId, updateDate: "2026-10-01" } }),
     ).rejects.toMatchObject({ code: "P2003" });
     await expect(
       prisma.updateItem.create({ data: { organizationId: other.organizationId, dailyUpdateId: u.id, section: "WORKED_ON", position: 0, text: "x" } }),

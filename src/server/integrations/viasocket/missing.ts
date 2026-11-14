@@ -1,6 +1,7 @@
 import { prisma } from "../../db";
 import { appUrl } from "../../env";
-import { isoWeekday, localDay, parseDay, zonedTimeToUtc } from "@/lib/dates";
+import { isoWeekday, localDay, zonedTimeToUtc } from "@/lib/dates";
+import { parseWorkingDays } from "@/lib/working-days";
 import { isViaSocketConfigured } from "./config";
 import { EVENT_CATALOG, enqueueEvent, eventKeys, type MissingPayload } from "./events";
 
@@ -33,7 +34,7 @@ async function checkOrganization(organizationId: string, now: Date): Promise<num
   const org = await prisma.organization.findUniqueOrThrow({ where: { id: organizationId }, include: { settings: true } });
   const tz = org.timezone;
   const cutoff = org.settings?.updateCutoffTime ?? "18:00";
-  const workingDays = org.settings?.workingDays ?? [1, 2, 3, 4, 5];
+  const workingDays = parseWorkingDays(org.settings?.workingDays);
   const today = localDay(now, tz);
   if (!workingDays.includes(isoWeekday(today))) return 0;
   const cutoffAt = zonedTimeToUtc(today, cutoff, tz);
@@ -45,7 +46,7 @@ async function checkOrganization(organizationId: string, now: Date): Promise<num
       select: { id: true, createdAt: true, user: { select: { name: true, email: true } }, team: { select: { name: true } } },
     }),
     prisma.dailyUpdate.findMany({
-      where: { organizationId, updateDate: parseDay(today), status: { in: ["SUBMITTED", "EDITED"] } },
+      where: { organizationId, updateDate: today, status: { in: ["SUBMITTED", "EDITED"] } },
       select: { membershipId: true },
     }),
   ]);

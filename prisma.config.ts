@@ -1,12 +1,14 @@
 import "dotenv/config";
+import path from "node:path";
 import { defineConfig } from "prisma/config";
 
-// Migrations use DIRECT_URL (non-pooled) when set — required for managed Postgres
-// providers that put a pooler in front of the database (Neon, Supabase, etc.).
+// SQLite: DATABASE_URL (file:…) wins, otherwise $DATA_DIR/daymark.db (Embarko), otherwise ./data/daymark.db.
+// Migrations are applied only with `prisma migrate deploy` (committed SQL files). Never `db push`.
+const raw = process.env.DATABASE_URL?.trim();
+const url = raw ? `file:${path.resolve(raw.replace(/^file:/, ""))}` : `file:${path.resolve(process.env.DATA_DIR?.trim() || "./data", "daymark.db")}`;
+
 export default defineConfig({
   schema: "prisma/schema.prisma",
   migrations: { path: "prisma/migrations" },
-  datasource: {
-    url: process.env.DIRECT_URL || process.env.DATABASE_URL || "",
-  },
+  datasource: { url },
 });

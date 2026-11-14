@@ -12,6 +12,7 @@ import {
 } from "@/server/integrations/viasocket/dispatch";
 import { runMissingUpdateCheck } from "@/server/integrations/viasocket/missing";
 import { runIntegrationCron } from "@/server/integrations/viasocket/cron";
+import { withJobLock } from "@/server/job-lock";
 import { automationsAccess } from "@/server/integrations/viasocket/access";
 import { linkFlow, sendTestEvent, syncFlows } from "@/server/integrations/viasocket/flows";
 import { listAttempts, listRecentDeliveries } from "@/server/integrations/viasocket/deliveries";
@@ -754,14 +755,29 @@ describe("I. Cron route, locking, retention and 'not configured'", () => {
     process.env.CRON_SECRET = saved;
   });
 
-  it("overlapping cron runs: the second is a no-op while the first holds the advisory lock", async () => {
-    const held = prisma.$transaction(async (tx) => {
-      await tx.$queryRaw`SELECT 1 AS held FROM (SELECT pg_advisory_xact_lock(727401)) AS l`;
-      const second = await runIntegrationCron(NOW);
-      return second;
-    }, { timeout: 20000 });
-    expect(await held).toEqual({ skipped: "another run is in progress" });
+  it("overlapping cron runs: the second is a no-op while the first holds the lease", async () => {
+    const first = await withJobLock("integrations-cron", 60_000, async () => runIntegrationCron(new Date()), () => new Date());
+    // `first` ran the cron while holding the lease named like the real job, so the nested run was skipped…
+    expect(first).toMatchObject({ ran: true, value: { skipped: "another run is in progress" } });
+    // …and the lease is released afterwards, so the next run works normally.
     expect(await runIntegrationCron(NOW)).toHaveProperty("sweep");
+  });
+
+  it("a crashed run's lease expires and can be taken over", async () => {
+    const name = `test-lock-${Date.now()}`;
+    const t0 = new Date("2026-11-14T00:00:00Z");
+    await prisma.jobLock.create({ data: { name, owner: "dead-run", lockedUntil: new Date(t0.getTime() + 60_000) } });
+    expect(await withJobLock(name, 60_000, async () => "x", () => new Date(t0.getTime() + 30_000))).toEqual({ ran: false }); // still leased
+    expect(await withJobLock(name, 60_000, async () => "x", () => new Date(t0.getTime() + 61_000))).toEqual({ ran: true, value: "x" }); // expired
+  });
+
+  it("the lease is exclusive under concurrent acquisition", async () => {
+    const name = `race-${Date.now()}`;
+    let running = 0, peak = 0;
+    const attempt = () => withJobLock(name, 60_000, async () => { running++; peak = Math.max(peak, running); await new Promise((r) => setTimeout(r, 50)); running--; return 1; });
+    const results = await Promise.all(Array.from({ length: 12 }, attempt));
+    expect(peak).toBe(1);
+    expect(results.filter((r) => r.ran).length).toBeGreaterThanOrEqual(1);
   });
 
   it("a cron pass retries what is due and leaves the rest", async () => {

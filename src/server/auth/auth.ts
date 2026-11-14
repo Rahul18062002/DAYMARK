@@ -1,3 +1,4 @@
+import { hashPassword, verifyPassword } from "./password";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { betterAuth } from "better-auth";
 import { prismaAdapter } from "better-auth/adapters/prisma";
@@ -28,12 +29,13 @@ function create() {
     baseURL: appUrl(),
     secret: env().BETTER_AUTH_SECRET,
     trustedOrigins: [appUrl()],
-    database: prismaAdapter(prisma, { provider: "postgresql" }),
+    database: prismaAdapter(prisma, { provider: "sqlite" }),
     emailAndPassword: {
       enabled: true,
       minPasswordLength: PASSWORD_MIN_LENGTH,
       maxPasswordLength: PASSWORD_MAX_LENGTH,
       autoSignIn: false,
+      password: { hash: hashPassword, verify: verifyPassword }, // same scrypt format, one at a time (memory)
       revokeSessionsOnPasswordReset: true,
       resetPasswordTokenExpiresIn: 60 * 60,
       async sendResetPassword({ user, url }) {

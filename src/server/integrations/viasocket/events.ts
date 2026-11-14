@@ -119,7 +119,7 @@ export async function buildUpdateEventPayload(
   const ctx = await loadUpdateContext(organizationId, updateId);
   if (!ctx) return null;
   const { row, manager, includeText } = ctx;
-  const date = row.updateDate.toISOString().slice(0, 10);
+  const date = row.updateDate;
   const employee = { name: row.membership.user.name, team: row.membership.team?.name ?? null };
   const base = envelope(type, eventId, row.organization.name, false, now);
   if (type === "UPDATE_SUBMITTED") {
@@ -167,7 +167,6 @@ export async function enqueueEvent(args: {
       });
       const made = await tx.integrationDelivery.createMany({
         data: flows.map((f) => ({ organizationId, integrationEventId: ev.id, automationFlowId: f.id, nextAttemptAt: args.now ?? new Date() })),
-        skipDuplicates: true,
       });
       return { created: true, integrationEventId: ev.id, deliveries: made.count };
     });

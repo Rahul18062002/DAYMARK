@@ -1,26 +1,24 @@
-import { prisma } from "../../db";
+import { withJobLock } from "../../job-lock";
 import { purgeOldIntegrationData, sweepDeliveries } from "./dispatch";
 import { runMissingUpdateCheck } from "./missing";
 
-const LOCK_KEY = 727401; // arbitrary app-wide advisory-lock id for this job
+const LOCK_NAME = "integrations-cron";
+const LOCK_TTL_MS = 5 * 60_000; // the scheduler gives each call 5 minutes; a dead run frees the lease after that
 
 /**
  * One reconciliation pass: detect missing updates, deliver/retry everything due, apply retention.
- * Vercel Cron is best-effort (a run can be skipped or delivered twice, and runs can overlap), so:
- *  - an advisory lock makes overlapping runs a no-op,
+ * The scheduler is best-effort (a run can be skipped, repeated or overlap), so:
+ *  - a lease row (JobLock) makes an overlapping run a no-op,
  *  - every step is idempotent (unique event keys, claim leases), and
  *  - each pass re-derives what is outstanding instead of trusting that the previous pass ran.
+ * No database transaction is held across the network calls.
  */
 export async function runIntegrationCron(now = new Date()) {
-  return prisma.$transaction(
-    async (tx) => {
-      const [{ locked }] = await tx.$queryRaw<{ locked: boolean }[]>`SELECT pg_try_advisory_xact_lock(${LOCK_KEY}) AS locked`;
-      if (!locked) return { skipped: "another run is in progress" as const };
-      const missing = await runMissingUpdateCheck({ now });
-      const sweep = await sweepDeliveries({ limit: 200 }, { now: () => now });
-      const purge = await purgeOldIntegrationData(now);
-      return { missing, sweep, purge };
-    },
-    { timeout: 55_000, maxWait: 5_000 },
-  );
+  const r = await withJobLock(LOCK_NAME, LOCK_TTL_MS, async () => {
+    const missing = await runMissingUpdateCheck({ now });
+    const sweep = await sweepDeliveries({ limit: 200 }, { now: () => now });
+    const purge = await purgeOldIntegrationData(now);
+    return { missing, sweep, purge };
+  }, () => now);
+  return r.ran ? r.value : { skipped: "another run is in progress" as const };
 }

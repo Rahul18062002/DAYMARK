@@ -8,10 +8,16 @@ export function mapDbError(e: unknown, messages: { unique?: string; reference?: 
   throw e;
 }
 
-/** Row lock on the organization: serializes membership-changing transactions (last-admin safety). */
+/**
+ * Serialize membership-changing transactions per organization (last-admin safety).
+ * SQLite has no row locks; it has one writer. Starting the transaction with a WRITE to the organization
+ * row takes the database write lock before anything is read, so two concurrent "remove the last admin"
+ * transactions run one after the other and the second sees the first one's result.
+ * (Within the single Embarko process, Prisma's SQLite adapter also runs transactions one at a time.)
+ */
 export async function lockOrganization(
-  tx: { $queryRaw: (q: TemplateStringsArray, ...v: unknown[]) => Promise<unknown> },
+  tx: { organization: { update: (a: { where: { id: string }; data: { updatedAt: Date } }) => Promise<unknown> } },
   organizationId: string,
 ) {
-  await tx.$queryRaw`SELECT "id" FROM "Organization" WHERE "id" = ${organizationId} FOR UPDATE`;
+  await tx.organization.update({ where: { id: organizationId }, data: { updatedAt: new Date() } });
 }
