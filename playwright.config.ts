@@ -7,6 +7,13 @@ const base = {
   DATABASE_URL: process.env.DATABASE_URL!,
   BETTER_AUTH_SECRET: process.env.BETTER_AUTH_SECRET!,
 };
+// Dummy viaSocket values (tokens are signed locally; nothing real). Server :3101 has none at all.
+const viaSocketDummy = {
+  VIASOCKET_ORG_ID: "test-org",
+  VIASOCKET_PROJECT_ID: "test-project",
+  VIASOCKET_EMBED_SECRET: process.env.VIASOCKET_EMBED_SECRET!,
+  CRON_SECRET: process.env.CRON_SECRET!,
+};
 
 // Two real servers on the same database:
 //  :3100 has SMTP pointed at a local capture server (emails are really sent over SMTP)
@@ -33,14 +40,14 @@ export default defineConfig({
       url: "http://localhost:3100/login",
       reuseExistingServer: false,
       timeout: 120_000,
-      env: { ...base, BETTER_AUTH_URL: "http://localhost:3100", NEXT_PUBLIC_APP_URL: "http://localhost:3100", SMTP_HOST: "127.0.0.1", SMTP_PORT: "2525", SMTP_FROM: "Daymark <no-reply@daymark.test>" },
+      env: { ...base, BETTER_AUTH_URL: "http://localhost:3100", NEXT_PUBLIC_APP_URL: "http://localhost:3100", SMTP_HOST: "127.0.0.1", SMTP_PORT: "2525", SMTP_FROM: "Daymark <no-reply@daymark.test>", ...viaSocketDummy },
     },
     {
       command: "npx next start -p 3101",
       url: "http://localhost:3101/login",
       reuseExistingServer: false,
       timeout: 120_000,
-      env: { ...base, BETTER_AUTH_URL: "http://localhost:3101", NEXT_PUBLIC_APP_URL: "http://localhost:3101", SMTP_HOST: "" },
+      env: { ...base, BETTER_AUTH_URL: "http://localhost:3101", NEXT_PUBLIC_APP_URL: "http://localhost:3101", SMTP_HOST: "", VIASOCKET_ORG_ID: "", VIASOCKET_PROJECT_ID: "", VIASOCKET_EMBED_SECRET: "", CRON_SECRET: "" },
     },
   ],
 });

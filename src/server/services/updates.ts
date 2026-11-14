@@ -5,6 +5,7 @@ import { audit } from "../audit";
 import { assertCan, type Actor } from "../policy";
 import { AppError, badRequest, conflict, forbidden, notFound } from "../errors";
 import { createUpdateSchema, patchUpdateSchema } from "../validation";
+import { notifyUpdateChanged } from "../integrations/viasocket/events";
 import { addDays, isoWeekday, localDay, toDayString, parseDay, weekStart, zonedTimeToUtc } from "@/lib/dates";
 
 type A = Actor & { userId: string };
@@ -82,7 +83,7 @@ export async function createUpdate(actor: A, raw: unknown, opts: Opts & { source
   const now = opts.now ?? new Date();
   const content: Content = { sections: fromInput(input.sections), links: input.links };
 
-  return prisma.$transaction(async (tx) => {
+  const result = await prisma.$transaction(async (tx) => {
     const cfg = await orgContext(tx, actor.organizationId);
     const today = localDay(now, cfg.timezone);
     const day = input.updateDate ?? today;
@@ -114,6 +115,11 @@ export async function createUpdate(actor: A, raw: unknown, opts: Opts & { source
     if ((e as { code?: string })?.code === "P2002") throw conflict("You already have an update for that day.", "UPDATE_EXISTS");
     throw e;
   });
+  // After commit, best-effort, can never fail or slow this call (see integrations/viasocket/events.ts).
+  if (input.submit) {
+    notifyUpdateChanged({ organizationId: actor.organizationId, updateId: result.id, submittedNow: true, blockerNow: computeHasBlockers(content.sections.BLOCKER) });
+  }
+  return result;
 }
 
 async function submit(tx: Tx, actor: A, id: string, day: string, content: Content, now: Date, cfg: Awaited<ReturnType<typeof orgContext>>) {
@@ -136,7 +142,8 @@ export async function updateUpdate(actor: A, id: string, raw: unknown, opts: Opt
   const patch = patchUpdateSchema.parse(raw);
   const now = opts.now ?? new Date();
 
-  return prisma.$transaction(async (tx) => {
+  let notify: { submittedNow: boolean; blockerNow: boolean } | null = null;
+  const result = await prisma.$transaction(async (tx) => {
     // Only the owner can change an update — everyone else gets "not found".
     const row = await tx.dailyUpdate.findFirst({ where: { id, organizationId: actor.organizationId, membershipId: actor.membershipId } });
     if (!row) throw notFound("Update");
@@ -153,7 +160,10 @@ export async function updateUpdate(actor: A, id: string, raw: unknown, opts: Opt
       if (patch.submit) assertSubmittable(next);
       await replaceContent(tx, actor.organizationId, id, next);
       await tx.dailyUpdate.update({ where: { id }, data: { hasBlockers: computeHasBlockers(next.sections.BLOCKER) } });
-      if (patch.submit) await submit(tx, actor, id, day, next, now, cfg);
+      if (patch.submit) {
+        await submit(tx, actor, id, day, next, now, cfg);
+        notify = { submittedNow: true, blockerNow: computeHasBlockers(next.sections.BLOCKER) };
+      }
       return { id, status: (patch.submit ? "SUBMITTED" : "DRAFT") as UpdateStatus, changed: true };
     }
 
@@ -182,8 +192,13 @@ export async function updateUpdate(actor: A, id: string, raw: unknown, opts: Opt
       },
     });
     await audit(tx, { organizationId: actor.organizationId, userId: actor.userId, action: "update.edited", entityType: "DailyUpdate", entityId: id, metadata: { date: day, revision: revisionNumber } });
+    // A blocker event fires only when this edit ADDS a real blocker that wasn't there before.
+    notify = { submittedNow: false, blockerNow: !row.hasBlockers && computeHasBlockers(next.sections.BLOCKER) };
     return { id, status: "EDITED" as UpdateStatus, changed: true };
   });
+  const n = notify as { submittedNow: boolean; blockerNow: boolean } | null;
+  if (n) notifyUpdateChanged({ organizationId: actor.organizationId, updateId: id, ...n });
+  return result;
 }
 
 export async function deleteDraft(actor: A, id: string) {

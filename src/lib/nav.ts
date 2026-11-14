@@ -1,15 +1,16 @@
 import type { Role } from "@/generated/prisma/enums";
 
-export type NavItem = { href: string; label: string; icon: "dashboard" | "users" | "settings" | "updates" | "team" };
+export type NavItem = { href: string; label: string; icon: "dashboard" | "users" | "settings" | "updates" | "team" | "automations" };
 
 /** Navigation mirrors server-side permissions; the pages and APIs enforce them independently. */
-export function navFor(role: Role): NavItem[] {
+export function navFor(role: Role, opts: { automations?: boolean } = {}): NavItem[] {
   const items: NavItem[] = [
     { href: "/dashboard", label: "Dashboard", icon: "dashboard" },
     { href: "/my-updates", label: "My Updates", icon: "updates" },
   ];
   if (role === "ADMIN" || role === "MANAGER") items.push({ href: "/team-updates", label: "Team Updates", icon: "team" });
   if (role === "ADMIN" || role === "MANAGER") items.push({ href: "/employees", label: "Employees", icon: "users" });
+  if (opts.automations) items.push({ href: "/automations", label: "Automations", icon: "automations" });
   if (role === "ADMIN") items.push({ href: "/settings", label: "Settings", icon: "settings" });
   return items;
 }

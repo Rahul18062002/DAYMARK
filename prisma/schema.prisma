@@ -159,6 +159,10 @@ model Organization {
   teamAccess  ManagerTeamAccess[]
   auditLogs   AuditLog[]
   dailyUpdates DailyUpdate[]
+  automationFlows      AutomationFlow[]
+  integrationEvents    IntegrationEvent[]
+  integrationDeliveries IntegrationDelivery[]
+  integrationAttempts  IntegrationAttempt[]
 }
 
 model OrgSettings {
@@ -171,6 +175,10 @@ model OrgSettings {
   // ISO weekdays 1 (Mon) … 7 (Sun) on which updates are expected.
   workingDays      Int[]       @default([1, 2, 3, 4, 5])
   aiEnabled        Boolean     @default(true)
+  // Automations (viaSocket): admins always have access; managers only when this is on.
+  automationsManagerAccess     Boolean @default(false)
+  // Off by default: blocker free-text is only sent to automations if the company opts in.
+  automationsIncludeBlockerText Boolean @default(false)
   updatedAt        DateTime    @updatedAt
 }
 
@@ -374,4 +382,124 @@ model UpdateRevision {
 
   @@unique([dailyUpdateId, revisionNumber])
   @@index([organizationId, createdAt])
+}
+
+
+// ───────────────────────── Automations (viaSocket, outbound events) ─────────────────────────
+
+enum IntegrationEventType {
+  UPDATE_SUBMITTED
+  UPDATE_BLOCKER_REPORTED
+  UPDATE_MISSING
+}
+
+enum DeliveryStatus {
+  PENDING
+  DELIVERED
+  FAILED
+  SKIPPED
+}
+
+enum AttemptOutcome {
+  SUCCESS
+  RETRYABLE_ERROR
+  PERMANENT_ERROR
+}
+
+/// A viaSocket flow created by an organization's admin in the embedded UI. Its run URL is a
+/// credential (it runs the organization's connected apps), so it is stored encrypted and never
+/// sent to the browser. The table is a cache of what viaSocket lists plus the Daymark event the
+/// flow is linked to (chosen explicitly by an admin).
+model AutomationFlow {
+  id             String                @id @default(cuid())
+  organizationId String
+  organization   Organization          @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  /// HMAC of the viaSocket flow id: lets us match listFlows() entries without storing the id in clear.
+  flowKey        String
+  /// AES-256-GCM(flow run URL).
+  urlEnc         String
+  title          String
+  description    String?
+  /// active | paused | deleted | unknown (as listed by viaSocket).
+  status         String
+  eventType      IntegrationEventType?
+  lastSyncedAt   DateTime              @default(now())
+  createdAt      DateTime              @default(now())
+  updatedAt      DateTime              @updatedAt
+
+  deliveries IntegrationDelivery[]
+
+  @@unique([organizationId, flowKey])
+  @@unique([id, organizationId])
+  @@index([organizationId, eventType, status])
+}
+
+/// One logical event. `eventId` is deterministic (hash of organization + eventKey), so the same
+/// event always has the same ID — even if the row is ever re-created — and flows can dedupe on it.
+model IntegrationEvent {
+  id             String               @id @default(cuid())
+  organizationId String
+  organization   Organization         @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  eventId        String
+  eventKey       String
+  type           IntegrationEventType
+  isTest         Boolean              @default(false)
+  /// Minimal payload sent to flows. Cleared after 30 days; the row (and its history) after 180.
+  payload        Json?
+  createdAt      DateTime             @default(now())
+
+  deliveries IntegrationDelivery[]
+
+  @@unique([organizationId, eventKey])
+  @@unique([id, organizationId])
+  @@unique([eventId])
+  @@index([organizationId, createdAt])
+  @@index([createdAt])
+}
+
+/// One event to one flow. Unique per (event, flow), so duplicate emission can never double-queue.
+model IntegrationDelivery {
+  id               String         @id @default(cuid())
+  organizationId   String
+  organization     Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  integrationEventId String
+  event            IntegrationEvent @relation(fields: [integrationEventId, organizationId], references: [id, organizationId], onDelete: Cascade)
+  automationFlowId String
+  flow             AutomationFlow @relation(fields: [automationFlowId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  status           DeliveryStatus @default(PENDING)
+  attemptCount     Int            @default(0)
+  nextAttemptAt    DateTime       @default(now())
+  /// Claim lease: another worker will not pick the row up until this passes.
+  lockedUntil      DateTime?
+  lastHttpStatus   Int?
+  lastError        String?
+  deliveredAt      DateTime?
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
+
+  attempts IntegrationAttempt[]
+
+  @@unique([integrationEventId, automationFlowId])
+  @@unique([id, organizationId])
+  @@index([status, nextAttemptAt])
+  @@index([organizationId, createdAt])
+}
+
+/// Append-only retry history: one row per HTTP attempt. Never stores URLs, payloads or response bodies.
+model IntegrationAttempt {
+  id             String              @id @default(cuid())
+  organizationId String
+  organization   Organization        @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  deliveryId     String
+  delivery       IntegrationDelivery @relation(fields: [deliveryId, organizationId], references: [id, organizationId], onDelete: Cascade)
+  attemptNumber  Int
+  startedAt      DateTime            @default(now())
+  durationMs     Int
+  outcome        AttemptOutcome
+  httpStatus     Int?
+  errorCode      String?
+  errorMessage   String?
+
+  @@unique([deliveryId, attemptNumber])
+  @@index([organizationId, startedAt])
 }

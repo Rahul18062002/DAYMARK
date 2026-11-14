@@ -87,6 +87,56 @@ Copy `.env.test.example` to `.env.test` (it points at a database named `daymark_
 * **Channels:** every channel calls `server/channels/ingest.ts#ingestUpdate`, which writes the same record with `source` set (`DASHBOARD` today; `SLACK`, `EMAIL`, `WHATSAPP`, `EXTERNAL_FORM` reserved). Only the dashboard exists; no other channel is implemented. The dashboard API fixes the channel server-side.
 * **Reported ≠ verified:** the UI labels everything as the employee's own report.
 
+## Automations (viaSocket) — optional
+
+Company admins can connect their own apps (Slack, email, …) and decide what happens when something occurs in
+Daymark, from the **Automations** page, which embeds viaSocket's builder. **Daymark works fully without it** and
+nothing in Daymark depends on viaSocket being reachable.
+
+* **What's sent:** three outbound events — *Daily Update Submitted*, *Employee Reports a Blocker*, *Daily Update
+  Missing* — with minimal payloads. Full contract, field-by-field sources and delivery guarantees:
+  [docs/automation-events.md](docs/automation-events.md). Weekly-report events come with Phase 3; Daymark actions
+  and any inbound API are deliberately not part of this.
+* **Isolation:** each organization is one viaSocket identity, `daymark-org-<organizationId>`, derived on the server
+  from the session. Flow URLs (which run the company's connected apps) are encrypted at rest and never sent to the browser.
+* **Access:** Admins only by default; an admin can authorize managers; employees never.
+* **Reliability:** stable event IDs, unique event keys (duplicate-safe), one delivery row per event and flow, an
+  attempt log (retry history), 8 s timeout, backoff retries, lease-based claiming with `FOR UPDATE SKIP LOCKED`, an
+  advisory lock around the cron pass. Delivery is **at-least-once**: duplicates are possible, so automations should
+  dedupe on `eventId`.
+
+### Configuration
+| Variable | Notes |
+|---|---|
+| `VIASOCKET_ORG_ID`, `VIASOCKET_PROJECT_ID`, `VIASOCKET_EMBED_SECRET` | From viaSocket (Integrations → your embed → Install Code). Server-side only. The secret also derives the key that encrypts stored flow URLs: rotating it requires **Refresh** on the Automations page and re-linking events. |
+| `CRON_SECRET` | ≥16 random characters. Vercel sends it as `Authorization: Bearer …` to `/api/cron/integrations`. The route refuses to run without it. |
+
+### Vercel Cron — schedule and plan limits
+`vercel.json` runs `/api/cron/integrations` every **15 minutes** (`*/15 * * * *`, UTC). It detects missing updates,
+delivers/retries everything due, and applies retention. Checked against Vercel's documentation (Cron Jobs: usage &
+pricing, last updated 2026-07-15; Schedules: limits):
+
+| Plan | Legacy `crons` (what `vercel.json` uses) | Newer `schedules` property (public beta) |
+|---|---|---|
+| **Pro / Enterprise** | every minute is allowed → **15-minute schedule works** | every minute (jitter 1–15 min) |
+| **Hobby** | **once per day only** (±59 min); a more frequent expression **fails the deployment** | at most every 15 minutes, always a 15-minute jitter window; 5,000 runs per billing period |
+
+* **A Pro (or Enterprise) plan is required for the shipped configuration.** On Hobby, either switch the entry to the
+  `schedules` form (same route, `"requestMethod": "GET"`, `CRON_SECRET` unchanged — Vercel documents this as a
+  configuration-only migration; remove the `crons` entry so it doesn't run twice) or accept daily runs.
+* **Timing is approximate:** schedules start within a jitter window, so a reminder can fire up to ~15 min after the
+  15-minute boundary that follows the cut-off. Retries are picked up by the same sweep.
+* Vercel's cron delivery is best-effort: a run can be skipped or delivered twice, runs can overlap, and Vercel never
+  retries a failed run, never follows redirects, and only invokes the production deployment. The job is built for this:
+  idempotent event keys, claim leases, an advisory lock, and a pass that re-derives what's outstanding each time. On a
+  once-a-day schedule, first delivery attempts still happen immediately (in the background after the action); only
+  retries and missing-update reminders are delayed.
+
+### Tests
+`npm test` covers the delivery machinery (idempotency, races, retries, history, isolation) and
+`npm run test:e2e` the Automations UI/permissions with dummy viaSocket values and no network. Real-connection tests
+(`tests/live/`) need your own viaSocket keys and a connected Slack test account and are run by hand.
+
 ## Phase 1 checklist
 - [x] Project setup, Prisma schema + migrations, tenant-safe composite foreign keys
 - [x] Better Auth (email + password), sessions, forgot / reset password (SMTP)

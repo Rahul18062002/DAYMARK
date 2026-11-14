@@ -14,6 +14,12 @@ const schema = z.object({
   AI_MODEL: z.string().optional(),
   ANTHROPIC_API_KEY: z.string().optional(),
   OPENAI_API_KEY: z.string().optional(),
+  // Automations (viaSocket) — all optional: Daymark runs fully without them.
+  VIASOCKET_ORG_ID: z.string().optional(),
+  VIASOCKET_PROJECT_ID: z.string().optional(),
+  VIASOCKET_EMBED_SECRET: z.string().optional(),
+  // Shared secret Vercel sends as `Authorization: Bearer …` to the cron route.
+  CRON_SECRET: z.string().optional(),
 });
 
 export type Env = z.infer<typeof schema>;
