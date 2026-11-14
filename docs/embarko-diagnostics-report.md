@@ -11,7 +11,7 @@ Measurements below were taken on the real platform unless marked "local".
 | Memory limit | cgroup `memory.max` = 256 MiB, swap 0. **Enforcement follows the cgroup (`memory.current`: anonymous + page cache + kernel), not summed process RSS.** Proof: a test process held a 345 MB RSS tree (240 MB cgroup) and was not killed. The `npm` wrapper shows 59 MB RSS but only ~11 MB anonymous. |
 | Disk / `DATA_DIR` | writable, 36 GB free of 102 GB; survives redeploys (marker file and the SQLite database both survived two redeploys) |
 | SQLite | `better-sqlite3` 13.1.1 installs and loads during Embarko's own build (SQLite 3.53); WAL, foreign keys, `VACUUM INTO` work. `@libsql/client` and `node:sqlite` also load (not needed). |
-| Platform bookkeeping tables | Embarko documents `_litestream_seq` / `_litestream_lock` in SQLite files; none appeared in our test files. Our migration path never diffs the schema, so it is safe either way. |
+| Platform bookkeeping tables | **Embarko adds `_litestream_lock` and `_litestream_seq` to `daymark.db`** (confirmed on the live database; the throw-away test files did not get them). It appears to replicate SQLite files, but documents no backup or restore, so we still build our own. Our migrations never diff the schema; `migrate deploy` ran fine with the tables present (`database is up to date`). |
 | Outbound network | reachable: `flow.sokt.io`, `embedfrontend.viasocket.com`, `api.anthropic.com`, `api.openai.com`, GitHub, npm |
 | File storage | works from inside the app (upload → public URL → download identical → delete). **Only allowed extensions** (png jpg jpeg gif webp avif ico pdf txt md csv json zip gz mp3 mp4 webm wav ogg woff woff2 ttf). Every file is public. Quota 500 MB, 25 MB per file. |
 | Scheduler | `embarko.json` schedule registered; ran by itself on time (`outcome: ok`); "run now" ok; `CRON_SECRET` is injected by Embarko and checked by the route |
@@ -58,7 +58,7 @@ Where the memory went (local profiling, `smaps`/V8 stats):
 
 ## 5. Security findings fixed along the way
 
-* `X-Real-IP` and the head of `X-Forwarded-For` are client-controlled on this platform. The old code (and Better Auth's default) would have let a client dodge or poison per-IP rate limits. Now `src/server/client-ip.ts` takes the entry just before the platform hop (`TRUSTED_PROXY_HOPS`, default 1), ignores anything prepended, and hands Better Auth a header we overwrite (`x-daymark-client-ip`). Unit-tested.
+* `X-Real-IP` and the head of `X-Forwarded-For` are client-controlled on this platform (observed: a client-sent `X-Real-IP` comes back unchanged; a spoofed `X-Forwarded-For` arrives as `spoof, <real client>, <platform hop>`). The old code (and Better Auth's default) would have let a client dodge or poison per-IP rate limits. Now `src/server/client-ip.ts` takes the entry just before the platform hop (`TRUSTED_PROXY_HOPS`, default 1), ignores anything prepended, and hands Better Auth a header we overwrite (`x-daymark-client-ip`). Unit-tested; on the live app the sign-in limit (10/min) triggers a 429 over a single connection and the old "could not determine a client IP" warning is gone. A full spoof test from the test sandbox is not possible because its outbound address rotates per request.
 * Next.js copies a local `.env` into `.next/standalone`; `scripts/postbuild.mjs` now deletes it. The upload excludes `.env*`, `.next`, tests and archives (verified: 0 env files in the tarball).
 
 ## 6. Remaining limitations / not done yet
