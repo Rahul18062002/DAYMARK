@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import fs from "node:fs";
+import { spawn } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import Database from "better-sqlite3";
@@ -102,4 +103,39 @@ describe("safe migrations", () => {
     after.close();
     fs.rmSync(p.dir, { recursive: true, force: true });
   }, 180_000);
+
+  it("waits out a database another process is still using (a redeploy overlap) instead of failing or restoring over it", async () => {
+    const all = fs.readdirSync(path.join(repo, "prisma/migrations")).filter((n) => /^\d+_/.test(n)).sort();
+    const p = project(1);
+    const opts = { cwd: p.dir, env: p.env, log: p.log };
+    expect(safeMigrate(opts).ok).toBe(true);
+    for (const n of all.slice(1)) fs.cpSync(path.join(repo, "prisma/migrations", n), path.join(p.dir, "prisma/migrations", n), { recursive: true });
+
+    new Database(p.dbFile).pragma("journal_mode = WAL");                                  // the real app runs the file in WAL mode
+    // the "old instance": holds the write lock for a few seconds, from another process
+    const holder = spawn(process.execPath, ["-e", `const D=require("better-sqlite3");const db=new D(${JSON.stringify(p.dbFile)});db.exec("BEGIN EXCLUSIVE");console.log("locked");setTimeout(()=>{db.exec("COMMIT");db.close();},9000);`], { cwd: repo, stdio: ["ignore", "pipe", "inherit"] });
+    await new Promise<void>((res) => holder.stdout!.once("data", () => res()));
+    const logs: string[] = [];
+    const t0 = Date.now();
+    const r = await new Promise<ReturnType<typeof safeMigrate>>((resolve) => setTimeout(() => resolve(safeMigrate({ ...opts, log: (m: string) => logs.push(m), lockRetries: 6, lockWaitMs: 1500 })), 50));
+    expect(r.ok).toBe(true);
+    expect(Date.now() - t0).toBeGreaterThan(6000);                                       // it really did wait for the lock to clear (the migration tool itself waits 5 s before giving up on a lock)
+    expect(logs.some((l) => /database is busy/.test(l))).toBe(true);
+    expect(logs.some((l) => /restored/.test(l))).toBe(false);                            // never restored over a file someone else was using
+    holder.kill();
+    const done = new Database(p.dbFile, { readonly: true });
+    expect(done.prepare(`SELECT COUNT(*) AS n FROM _prisma_migrations WHERE finished_at IS NOT NULL`).get()).toEqual({ n: all.length });
+    done.close();
+
+    // and if the lock never clears, it gives up WITHOUT touching the file (here without WAL, so even the safety snapshot is blocked)
+    const p2 = project(1);
+    expect(safeMigrate({ cwd: p2.dir, env: p2.env, log: p2.log }).ok).toBe(true);
+    for (const n of all.slice(1)) fs.cpSync(path.join(repo, "prisma/migrations", n), path.join(p2.dir, "prisma/migrations", n), { recursive: true });
+    const stuck = spawn(process.execPath, ["-e", `const D=require("better-sqlite3");const db=new D(${JSON.stringify(p2.dbFile)});db.exec("BEGIN EXCLUSIVE");console.log("locked");setTimeout(()=>{},20000);`], { cwd: repo, stdio: ["ignore", "pipe", "inherit"] });
+    await new Promise<void>((res) => stuck.stdout!.once("data", () => res()));
+    const g = safeMigrate({ cwd: p2.dir, env: p2.env, log: p2.log, lockRetries: 1, lockWaitMs: 300 });
+    stuck.kill();
+    expect(g).toMatchObject({ ok: false, locked: true, restored: false });
+    fs.rmSync(p.dir, { recursive: true, force: true }); fs.rmSync(p2.dir, { recursive: true, force: true });
+  }, 120_000);
 });

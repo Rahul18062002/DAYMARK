@@ -61,6 +61,28 @@ check("manager sees the team's submissions", view.status === 200 && JSON.stringi
 const empView = await emps[1].c.req("GET", `/api/team-updates?from=${today}&to=${today}`);
 check("an employee cannot use the team view", empView.status === 403 || empView.status === 404, String(empView.status));
 
+// ── goals, hierarchy, visibility, insights, reports (the newer features) ──
+const goal = await A.admin.req("POST", "/api/objectives", { title: "Smoke company goal", level: "COMPANY", periodStart: "2020-01-01", periodEnd: "2099-12-31" });
+check("admin creates a company goal", goal.status === 200, String(goal.status));
+const gid = goal.body.id as string;
+const kr1 = await A.admin.req("POST", `/api/objectives/${gid}/key-results`, { title: "Customers", type: "NUMBER", startValue: 0, targetValue: 10 });
+await A.admin.req("POST", `/api/key-results/${kr1.body.id}/check-ins`, { value: 4, confidence: "ON_TRACK" });
+const mine = await emps[0].c.req("POST", "/api/objectives", { title: "Smoke own goal", level: "INDIVIDUAL", parentId: gid, periodStart: "2020-01-01", periodEnd: "2099-12-31" });
+check("an employee adds their own goal under the company goal", mine.status === 200, String(mine.status));
+const k2 = await emps[0].c.req("POST", `/api/objectives/${mine.body.id}/key-results`, { title: "Docs", type: "NUMBER", startValue: 0, targetValue: 2 });
+await emps[0].c.req("POST", `/api/key-results/${k2.body.id}/check-ins`, { value: 1 });
+const detail = await emps[1].c.req("GET", `/api/objectives/${gid}`);
+check("goal progress rolls up (company goal reads 45%)", Math.round(detail.body.objective?.progress) === 45, String(detail.body.objective?.progress));
+check("an employee can't edit a company goal", (await emps[1].c.req("PATCH", `/api/objectives/${gid}`, { title: "x" })).status === 403);
+check("the org chart answers", (await A.admin.req("GET", "/api/org-tree")).status === 200);
+check("peers can't compare while visibility is private", (await emps[1].c.req("GET", "/api/insights?group=all")).status === 403);
+await A.admin.req("PATCH", "/api/organization/settings", { visibilityScope: "COMPANY" });
+const cmp = await emps[1].c.req("GET", "/api/insights?group=all");
+check("peers can compare once the company opens visibility", cmp.status === 200 && JSON.stringify(cmp.body).includes("emp0"), String(cmp.status));
+await A.admin.req("PATCH", "/api/organization/settings", { visibilityScope: "OWN" });
+check("reports list answers (nothing yet)", (await emps[0].c.req("GET", "/api/reports")).status === 200);
+for (const path of ["/goals", `/goals/${gid}`, "/org-chart", "/reports", "/settings"]) { const r = await fetch(`${BASE}${path}`, { headers: { cookie: A.admin.cookie } }); check(`page ${path} renders`, r.status === 200, String(r.status)); await r.arrayBuffer(); }
+
 // ── organization B: isolation ──
 const B = await org("bravo");
 const ids = ((view.body as any)?.rows ?? []).find((r: any) => r.updateId)?.updateId as string | undefined;
@@ -79,7 +101,7 @@ check("scheduler route refuses a wrong secret (401)", cronBad.status === 401, St
 // ── load: pages (server-rendered) and API with real sessions, sampling platform memory ──
 const m1 = await mem(); if (m1) show("after functional tests", m1);
 const sessions = [mgr.c, A.admin, ...emps.map((e) => e.c)];
-const paths = ["/dashboard", "/team-updates", "/my-updates", "/automations", "/settings", "/people"];
+const paths = ["/dashboard", "/team-updates", "/my-updates", "/automations", "/settings", "/employees", "/goals", "/org-chart", "/reports"];
 const errs = new Map<string, number>(); let ok = 0, bad2 = 0; const lat: number[] = [];
 const DURATION = Number(process.env.LOAD_SECONDS ?? 90), CONC = Number(process.env.LOAD_CONC ?? 12);
 const end = Date.now() + DURATION * 1000; let peakSeen = m1?.cur ?? 0; const samples: any[] = [];

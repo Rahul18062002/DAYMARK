@@ -56,27 +56,63 @@ function restore(dbFile, snap) {
   try { return db.pragma("integrity_check", { simple: true }) === "ok"; } finally { db.close(); }
 }
 
-export function safeMigrate({ cwd = process.cwd(), env = process.env, log = console.log } = {}) {
+// During a redeploy the previous instance can still hold the database for a few seconds ("database is locked").
+// That is not a failed migration: nothing has been applied, so we wait and retry, and never restore over a file
+// another process may still be writing to.
+const LOCKED = /database is locked|SQLITE_BUSY|database table is locked/i;
+const sleepSync = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+
+export function safeMigrate({ cwd = process.cwd(), env = process.env, log = console.log, lockRetries = 8, lockWaitMs = 7500 } = {}) {
   const dbFile = resolveDbFile(env);
   const migrationsDir = path.resolve(cwd, "prisma/migrations");
   fs.mkdirSync(path.dirname(dbFile), { recursive: true });
-  const { pending, failed } = pendingMigrations(dbFile, migrationsDir);
+  /** Run a database step; if another process has the file locked, wait and retry (never throws for a lock: returns BUSY). */
+  const BUSY = Symbol("busy");
+  const whileBusy = (fn) => {
+    for (let t = 0; ; t++) {
+      try { return fn(); }
+      catch (e) {
+        if (!(LOCKED.test(String(e?.message)) || e?.code === "SQLITE_BUSY")) throw e;
+        if (t >= lockRetries) return BUSY;
+        log(`[migrate] database is busy (another process has it open); waiting ${lockWaitMs / 1000}s, attempt ${t + 1}/${lockRetries}`);
+        sleepSync(lockWaitMs);
+      }
+    }
+  };
+  const stillLocked = (what) => { log(`[migrate] the database stayed locked while ${what}; nothing was changed. Not starting; it will be retried.`); return { ok: false, restored: false, locked: true, snapshot: null, error: "database is locked" }; };
+  const state = whileBusy(() => pendingMigrations(dbFile, migrationsDir));
+  if (state === BUSY) return stillLocked("checking its state");
+  const { pending, failed } = state;
   if (failed.length) log(`[migrate] warning: earlier failed migration(s) recorded: ${failed.join(", ")}`);
   if (pending.length === 0 && failed.length === 0) { log("[migrate] database is up to date"); return { ok: true, applied: [], snapshot: null }; }
 
   const existed = fs.existsSync(dbFile) && fs.statSync(dbFile).size > 0;
   let snap = null;
   if (existed) {
-    snap = snapshot(dbFile, path.join(path.dirname(dbFile), "pre-migrate"), pending[0] ?? "retry");
+    // Taking the snapshot needs a read of the file too; wait for a busy database the same way.
+    snap = whileBusy(() => snapshot(dbFile, path.join(path.dirname(dbFile), "pre-migrate"), pending[0] ?? "retry"));
+    if (snap === BUSY) return stillLocked("taking the safety snapshot");
     log(`[migrate] pending: ${pending.join(", ")}; snapshot saved: ${path.basename(snap)}`);
   } else {
     log(`[migrate] new database; applying: ${pending.join(", ")}`);
   }
 
   const cli = path.join(path.dirname(require.resolve("prisma/package.json")), "build/index.js");
-  const r = spawnSync(process.execPath, [cli, "migrate", "deploy"], { cwd, env: { ...env, DATABASE_URL: `file:${dbFile}` }, encoding: "utf8" });
-  if (r.status === 0) { log(`[migrate] applied: ${pending.join(", ")}`); return { ok: true, applied: pending, snapshot: snap }; }
+  let r, tries = 0;
+  for (;;) {
+    r = spawnSync(process.execPath, [cli, "migrate", "deploy"], { cwd, env: { ...env, DATABASE_URL: `file:${dbFile}` }, encoding: "utf8" });
+    if (r.status === 0) break;
+    const out = `${r.stderr ?? ""}${r.stdout ?? ""}`;
+    if (LOCKED.test(out) && tries < lockRetries) { tries++; log(`[migrate] database is busy (another process has it open); waiting ${lockWaitMs / 1000}s, attempt ${tries}/${lockRetries}`); sleepSync(lockWaitMs); continue; }
+    break;
+  }
+  if (r.status === 0) { log(`[migrate] applied: ${pending.join(", ")}${tries ? ` (after ${tries} wait${tries === 1 ? "" : "s"})` : ""}`); return { ok: true, applied: pending, snapshot: snap, waited: tries }; }
 
+  if (LOCKED.test(`${r.stderr ?? ""}${r.stdout ?? ""}`)) {
+    // Nothing was applied, and another process still owns the file: leave it exactly as it is. The platform restarts us.
+    log("[migrate] the database stayed locked; nothing was changed. Not starting; it will be retried.");
+    return { ok: false, restored: false, locked: true, snapshot: snap, error: r.stderr || r.stdout };
+  }
   log(`[migrate] FAILED:\n${(r.stderr || r.stdout || "").trim().split("\n").slice(-12).join("\n")}`);
   if (snap) {
     const ok = restore(dbFile, snap);
