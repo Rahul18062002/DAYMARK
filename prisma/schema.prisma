@@ -168,6 +168,10 @@ model Organization {
   teamAccess  ManagerTeamAccess[]
   auditLogs   AuditLog[]
   dailyUpdates DailyUpdate[]
+  objectives   Objective[]
+  keyResults   KeyResult[]
+  keyResultCheckIns KeyResultCheckIn[]
+  workTasks    WorkTask[]
   automationFlows      AutomationFlow[]
   integrationEvents    IntegrationEvent[]
   integrationDeliveries IntegrationDelivery[]
@@ -205,6 +209,7 @@ model Department {
 
   teams   Team[]
   members Membership[]
+  objectives Objective[]
 
   @@unique([id, organizationId])
   @@unique([organizationId, name])
@@ -223,6 +228,7 @@ model Team {
 
   members      Membership[]        @relation("MemberTeam")
   accessGrants ManagerTeamAccess[]
+  objectives   Objective[]
 
   @@unique([id, organizationId])
   @@unique([organizationId, name])
@@ -255,6 +261,12 @@ model Membership {
 
   directReports Membership[]        @relation("Manager")
   mentees       Membership[]        @relation("Mentor")
+  ownedObjectives   Objective[]     @relation("ObjectiveOwner")
+  createdObjectives Objective[]     @relation("ObjectiveCreator")
+  ownedKeyResults   KeyResult[]     @relation("KeyResultOwner")
+  checkIns          KeyResultCheckIn[]
+  assignedTasks     WorkTask[]      @relation("TaskAssignee")
+  createdTasks      WorkTask[]      @relation("TaskCreator")
   managedTeams  Team[]              @relation("TeamManager")
   teamAccess    ManagerTeamAccess[]
   invitationsSent Invitation[]
@@ -533,4 +545,147 @@ model JobLock {
   owner       String
   lockedUntil DateTime
   updatedAt   DateTime @updatedAt
+}
+
+// ───────────────────────── Goals: objectives, key results, KPIs, tasks ─────────────────────────
+// Objectives cascade: a company objective has department/team/individual objectives under it (`parentId`).
+// Everything is tenant-scoped with composite foreign keys, like the rest of the model.
+
+enum ObjectiveLevel {
+  COMPANY
+  DEPARTMENT
+  TEAM
+  INDIVIDUAL
+}
+
+enum ObjectiveStatus {
+  ACTIVE
+  DONE
+  CANCELLED
+}
+
+enum Confidence {
+  ON_TRACK
+  AT_RISK
+  OFF_TRACK
+}
+
+enum KeyResultType {
+  NUMBER
+  PERCENT
+  BOOLEAN
+}
+
+enum TaskStatus {
+  TODO
+  IN_PROGRESS
+  DONE
+}
+
+model Objective {
+  id             String          @id @default(cuid())
+  organizationId String
+  organization   Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  level          ObjectiveLevel
+  ownerId        String
+  owner          Membership      @relation("ObjectiveOwner", fields: [ownerId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  departmentId   String?
+  department     Department?     @relation(fields: [departmentId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  teamId         String?
+  team           Team?           @relation(fields: [teamId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  parentId       String?
+  parent         Objective?      @relation("ObjectiveTree", fields: [parentId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  children       Objective[]     @relation("ObjectiveTree")
+  title          String
+  description    String?
+  /// "YYYY-MM-DD" in the organization's calendar.
+  periodStart    String
+  periodEnd      String
+  status         ObjectiveStatus @default(ACTIVE)
+  createdById    String
+  createdBy      Membership      @relation("ObjectiveCreator", fields: [createdById, organizationId], references: [id, organizationId], onDelete: Restrict)
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+
+  keyResults KeyResult[]
+  tasks      WorkTask[]
+
+  @@unique([id, organizationId])
+  @@index([organizationId, periodStart, periodEnd])
+  @@index([organizationId, ownerId])
+  @@index([organizationId, parentId])
+  @@index([organizationId, level])
+}
+
+model KeyResult {
+  id             String        @id @default(cuid())
+  organizationId String
+  organization   Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  objectiveId    String
+  objective      Objective     @relation(fields: [objectiveId, organizationId], references: [id, organizationId], onDelete: Cascade)
+  ownerId        String
+  owner          Membership    @relation("KeyResultOwner", fields: [ownerId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  title          String
+  type           KeyResultType @default(NUMBER)
+  startValue     Float         @default(0)
+  targetValue    Float
+  currentValue   Float         @default(0)
+  unit           String?
+  /// A KPI is an ongoing indicator that is read repeatedly (revenue, uptime…); the check-in history is its time series.
+  isKpi          Boolean       @default(false)
+  weight         Int           @default(1)
+  confidence     Confidence    @default(ON_TRACK)
+  lastCheckInAt  DateTime?
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  checkIns KeyResultCheckIn[]
+  tasks    WorkTask[]
+
+  @@unique([id, organizationId])
+  @@index([organizationId, objectiveId])
+  @@index([organizationId, ownerId])
+}
+
+/// Append-only: every progress reading is kept, so progress and KPI trends have a history.
+model KeyResultCheckIn {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  keyResultId    String
+  keyResult      KeyResult    @relation(fields: [keyResultId, organizationId], references: [id, organizationId], onDelete: Cascade)
+  authorId       String
+  author         Membership   @relation(fields: [authorId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  value          Float
+  confidence     Confidence
+  comment        String?
+  createdAt      DateTime     @default(now())
+
+  @@index([keyResultId, createdAt])
+  @@index([organizationId, createdAt])
+}
+
+model WorkTask {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  objectiveId    String
+  objective      Objective    @relation(fields: [objectiveId, organizationId], references: [id, organizationId], onDelete: Cascade)
+  keyResultId    String?
+  keyResult      KeyResult?   @relation(fields: [keyResultId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  assigneeId     String
+  assignee       Membership   @relation("TaskAssignee", fields: [assigneeId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  createdById    String
+  createdBy      Membership   @relation("TaskCreator", fields: [createdById, organizationId], references: [id, organizationId], onDelete: Restrict)
+  title          String
+  status         TaskStatus   @default(TODO)
+  /// "YYYY-MM-DD"
+  dueDate        String?
+  doneAt         DateTime?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  @@unique([id, organizationId])
+  @@index([organizationId, objectiveId])
+  @@index([organizationId, assigneeId, status])
 }

@@ -11,7 +11,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   const org = await prisma.organization.findFirst({ where: { id: ctx.organizationId }, select: { name: true } });
   return (
     <AppShell
-      items={navFor(ctx.role, { automations: (await automationsAccess(ctx)).allowed, teamView: await canOpenTeamView(prisma, ctx), orgChart: true })}
+      items={navFor(ctx.role, { automations: (await automationsAccess(ctx)).allowed, teamView: await canOpenTeamView(prisma, ctx), orgChart: true, goals: true })}
       orgName={org?.name ?? "Workspace"}
       user={{ name: state.userName, email: state.userEmail, roleLabel: ROLE_LABEL[ctx.role] }}
     >
