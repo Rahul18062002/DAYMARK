@@ -3,14 +3,15 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
 import { useTheme } from "next-themes";
-import { ClipboardList, LayoutDashboard, Menu, Moon, PenLine, Settings, Sun, Users, Workflow, X } from "lucide-react";
+import { ClipboardList, DatabaseBackup, GitFork, LayoutDashboard, Menu, Moon, Network, PenLine, Scale, Settings, Sun, Target, Users, Workflow, X } from "lucide-react";
 import { Logo } from "@/components/brand/logo";
-import { Badge } from "@/components/ui/badge";
+import { Avatar } from "@/components/ui/avatar";
 import { SignOutButton } from "./sign-out-button";
 import { cn } from "@/lib/utils";
 import type { NavItem } from "@/lib/nav";
 
-const ICONS = { dashboard: LayoutDashboard, users: Users, settings: Settings, updates: PenLine, team: ClipboardList, automations: Workflow } as const;
+const ICONS = { dashboard: LayoutDashboard, users: Users, settings: Settings, updates: PenLine, team: ClipboardList, automations: Workflow, goals: Target, orgchart: Network, compare: Scale, backup: DatabaseBackup } as const;
+void GitFork;
 
 function ThemeToggle() {
   const { resolvedTheme, setTheme } = useTheme();
@@ -27,18 +28,27 @@ function ThemeToggle() {
 
 function NavLinks({ items, onNavigate }: { items: NavItem[]; onNavigate?: () => void }) {
   const pathname = usePathname();
+  const groups = items.reduce<Record<string, NavItem[]>>((acc, i) => ((acc[i.group] ??= []).push(i), acc), {});
   return (
-    <nav aria-label="Main" className="space-y-1">
-      {items.map((item) => {
-        const Icon = ICONS[item.icon];
-        const active = pathname === item.href || pathname.startsWith(item.href + "/");
-        return (
-          <Link key={item.href} href={item.href} onClick={onNavigate} aria-current={active ? "page" : undefined}
-            className={cn("flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors", active ? "bg-primary-soft text-primary" : "text-muted hover:bg-surface-muted hover:text-foreground")}>
-            <Icon className="h-4 w-4" aria-hidden /> {item.label}
-          </Link>
-        );
-      })}
+    <nav aria-label="Main" className="space-y-5">
+      {Object.entries(groups).map(([group, list]) => (
+        <div key={group}>
+          <div className="mb-1.5 px-3 text-[11px] font-semibold uppercase tracking-[0.08em] text-muted/80">{group}</div>
+          <div className="space-y-0.5">
+            {list.map((item) => {
+              const Icon = ICONS[item.icon];
+              const active = pathname === item.href || pathname.startsWith(item.href + "/");
+              return (
+                <Link key={item.href} href={item.href} onClick={onNavigate} aria-current={active ? "page" : undefined}
+                  className={cn("group relative flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors", active ? "bg-primary-soft text-primary" : "text-muted hover:bg-surface-muted hover:text-foreground")}>
+                  {active && <span aria-hidden className="absolute -left-3 top-1.5 bottom-1.5 w-1 rounded-r-full bg-primary" />}
+                  <Icon className={cn("h-4 w-4 transition-colors", active ? "text-primary" : "text-muted group-hover:text-foreground")} aria-hidden /> {item.label}
+                </Link>
+              );
+            })}
+          </div>
+        </div>
+      ))}
     </nav>
   );
 }
@@ -46,9 +56,12 @@ function NavLinks({ items, onNavigate }: { items: NavItem[]; onNavigate?: () => 
 function Account({ name, email, roleLabel }: { name: string; email: string; roleLabel: string }) {
   return (
     <div className="space-y-3 border-t border-border p-4">
-      <div className="min-w-0">
-        <div className="flex items-center gap-2"><span className="truncate text-sm font-medium">{name}</span><Badge tone="primary">{roleLabel}</Badge></div>
-        <div className="truncate text-xs text-muted">{email}</div>
+      <div className="flex items-center gap-3">
+        <Avatar name={name} />
+        <div className="min-w-0">
+          <div className="truncate text-sm font-medium leading-tight">{name}</div>
+          <div className="truncate text-xs text-muted">{roleLabel} · {email}</div>
+        </div>
       </div>
       <SignOutButton variant="secondary" size="sm" className="w-full" />
     </div>
@@ -69,14 +82,14 @@ export function AppShell({ items, orgName, user, children }: { items: NavItem[];
   const sidebar = (onNavigate?: () => void) => (
     <div className="flex h-full flex-col">
       <div className="px-5 py-5"><Logo /></div>
-      <div className="px-3"><div className="mb-2 truncate px-3 text-xs font-medium uppercase tracking-wide text-muted">{orgName}</div><NavLinks items={items} onNavigate={onNavigate} /></div>
+      <div className="px-3"><div className="mb-4 flex items-center gap-2 rounded-lg bg-surface-muted px-3 py-2"><span aria-hidden className="h-2 w-2 shrink-0 rounded-full bg-success" /><span className="truncate text-xs font-medium text-muted">{orgName}</span></div><NavLinks items={items} onNavigate={onNavigate} /></div>
       <div className="mt-auto"><Account {...user} /></div>
     </div>
   );
 
   return (
     <div className="min-h-dvh lg:pl-64">
-      <aside className="fixed inset-y-0 left-0 hidden w-64 border-r border-border bg-surface lg:block">{sidebar()}</aside>
+      <aside className="fixed inset-y-0 left-0 hidden w-64 overflow-y-auto border-r border-border bg-surface lg:block">{sidebar()}</aside>
 
       <header className="sticky top-0 z-30 flex h-14 items-center justify-between border-b border-border bg-surface/90 px-4 backdrop-blur lg:px-8">
         <button type="button" className="inline-flex h-9 w-9 cursor-pointer items-center justify-center rounded-lg text-muted hover:bg-surface-muted lg:hidden" aria-label="Open menu" aria-expanded={open} onClick={() => setOpen(true)}>
@@ -97,7 +110,7 @@ export function AppShell({ items, orgName, user, children }: { items: NavItem[];
         </div>
       )}
 
-      <main className="mx-auto w-full max-w-6xl px-4 py-6 sm:px-6 lg:px-8 lg:py-8">{children}</main>
+      <main className="animate-in mx-auto w-full max-w-6xl px-4 py-6 sm:px-6 lg:px-8 lg:py-8">{children}</main>
     </div>
   );
 }

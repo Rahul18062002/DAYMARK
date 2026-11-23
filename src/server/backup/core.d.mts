@@ -1,0 +1,15 @@
+export type StoredFile = { id: string; filename: string; url: string; sizeBytes?: number; createdAt?: string };
+export type Storage = { upload(name: string, buf: Buffer): Promise<{ id: string; url: string }>; list(): Promise<StoredFile[]>; download(url: string): Promise<Buffer>; remove(id: string): Promise<void> };
+export const BACKUP_PREFIX: string;
+export function parseKey(raw: string | undefined): Buffer;
+export function encryptBackup(plain: Buffer, key: Buffer): Buffer;
+export function decryptBackup(buf: Buffer, key: Buffer): Buffer;
+export function backupFileName(date?: Date, rand?: string): string;
+export function parseBackupName(name: string): Date | null;
+export function selectRetention<T extends { id: string; filename: string }>(files: T[], o?: { daily?: number; weekly?: number }): { keep: Set<string>; remove: T[] };
+export function storageClient(o: { url?: string; token?: string; app?: string; fetch?: typeof fetch }): Storage;
+export function snapshotDatabase(dbFile: string, out: string): string;
+export function integrityCheck(file: string): { tables: number; organizations: number };
+export function verifyBackup(buf: Buffer, key: Buffer, dbFile: string): { bytes: number; tables: number; organizations: number };
+export function runBackup(o: { dbFile: string; key: Buffer; storage: Storage; now?: Date; keepDaily?: number; keepWeekly?: number; log?: (m: string) => void }): Promise<{ ok: true; filename: string; remoteId: string; sizeBytes: number; verified: boolean; deleted: number; bytes: number; tables: number; organizations: number }>;
+export function restoreBackup(o: { dbFile: string; key: Buffer; storage: Storage; name?: string; log?: (m: string) => void }): Promise<{ ok: true; filename: string; previous: string | null; tables: number; organizations: number }>;
