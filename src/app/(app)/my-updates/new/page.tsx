@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { ArrowLeft } from "lucide-react";
+import { linkableGoals } from "@/server/services/goals";
 import { requirePageContext } from "@/server/auth/context";
 import { getTodayStatus, MAX_BACKDATE_DAYS } from "@/server/services/updates";
 import { PageHeader } from "@/components/ui/states";
@@ -26,7 +27,7 @@ export default async function NewUpdatePage({ searchParams }: { searchParams: Pr
       <PageHeader title="Daily update" description="What did you get done? Keep it simple and in your own words." />
       <div className="max-w-3xl">
         <UpdateForm mode="create" updateDate={date} minDate={min} maxDate={today}
-          initial={{ workedOn: [""], completed: [], pending: [], blockers: [], nextPriorities: [] }} initialLinks={[]} />
+          initial={{ workedOn: [""], completed: [], pending: [], blockers: [], nextPriorities: [] }} initialLinks={[]} goals={await linkableGoals(ctx)} />
       </div>
     </>
   );

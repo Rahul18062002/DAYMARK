@@ -363,7 +363,8 @@ describe("D. Manager overview, filters and trends", () => {
     const today = await listTeamUpdates(s.mgr, {}, { now: NOW }); // default = today
     expect(today.from).toBe(DAY);
     expect(today.rows.map((r) => `${r.employeeName} ${r.status}`).sort()).toEqual(["Asha SUBMITTED", "Ben MISSING", "Chen MISSING"]);
-    await expect(listTeamUpdates(s.mgr, { from: "2026-09-01", to: "2026-11-13" }, { now: NOW })).rejects.toMatchObject({ status: 400 });
+    await expect(listTeamUpdates(s.mgr, { from: "2026-07-01", to: "2026-11-13" }, { now: NOW })).rejects.toMatchObject({ status: 400 });   // more than a quarter (92 days)
+    await expect(listTeamUpdates(s.mgr, { from: "2026-09-01", to: "2026-11-13" }, { now: NOW })).resolves.toBeTruthy();       // up to a quarter is fine, and paged
   });
 
   it("returns a per-day trend and recent raw blockers / pending / completed entries", async () => {

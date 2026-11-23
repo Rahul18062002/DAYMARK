@@ -365,6 +365,7 @@ model DailyUpdate {
 
   items       UpdateItem[]
   attachments UpdateAttachment[]
+  goalLinks   UpdateGoalLink[]
   revisions   UpdateRevision[]
 
   @@unique([membershipId, updateDate])
@@ -609,6 +610,7 @@ model Objective {
 
   keyResults KeyResult[]
   tasks      WorkTask[]
+  updateLinks UpdateGoalLink[]
 
   @@unique([id, organizationId])
   @@index([organizationId, periodStart, periodEnd])
@@ -688,4 +690,18 @@ model WorkTask {
   @@unique([id, organizationId])
   @@index([organizationId, objectiveId])
   @@index([organizationId, assigneeId, status])
+}
+
+/// "This update contributes to that goal": connects daily work to the objective tree so progress is measurable.
+model UpdateGoalLink {
+  id             String      @id @default(cuid())
+  organizationId String
+  dailyUpdateId  String
+  dailyUpdate    DailyUpdate @relation(fields: [dailyUpdateId, organizationId], references: [id, organizationId], onDelete: Cascade)
+  objectiveId    String
+  objective      Objective   @relation(fields: [objectiveId, organizationId], references: [id, organizationId], onDelete: Cascade)
+  createdAt      DateTime    @default(now())
+
+  @@unique([dailyUpdateId, objectiveId])
+  @@index([organizationId, objectiveId])
 }

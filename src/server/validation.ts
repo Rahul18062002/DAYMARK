@@ -133,12 +133,15 @@ export const createUpdateSchema = z.object({
   sections: sectionsSchema,
   links: z.array(linkSchema).max(MAX_LINKS, `At most ${MAX_LINKS} links`).default([]),
   submit: z.boolean().default(false),
+  /** Goals this update contributes to (objective ids). */
+  goalIds: z.array(idSchema).max(10, "Link at most 10 goals").optional(),
 });
 
 export const patchUpdateSchema = z.object({
   sections: sectionsSchema.optional(),
   links: z.array(linkSchema).max(MAX_LINKS).optional(),
   submit: z.boolean().optional(),
+  goalIds: z.array(idSchema).max(10, "Link at most 10 goals").optional(),
 });
 
 export const teamUpdateFilterSchema = z.object({
@@ -149,4 +152,6 @@ export const teamUpdateFilterSchema = z.object({
   membershipId: idSchema.optional(),
   status: z.enum(["submitted", "edited", "missing"]).optional(),
   blockers: z.enum(["1"]).optional(),
+  page: z.coerce.number().int().min(1).max(10_000).optional(),
+  pageSize: z.coerce.number().int().min(10).max(200).optional(),
 });

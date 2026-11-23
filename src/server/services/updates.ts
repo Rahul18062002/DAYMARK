@@ -5,6 +5,7 @@ import { audit } from "../audit";
 import { assertCan, type Actor } from "../policy";
 import { AppError, badRequest, conflict, forbidden, notFound } from "../errors";
 import { createUpdateSchema, patchUpdateSchema } from "../validation";
+import { setUpdateGoalLinks } from "./goals";
 import { notifyUpdateChanged } from "../integrations/viasocket/events";
 import { addDays, isoWeekday, localDay, weekStart, zonedTimeToUtc } from "@/lib/dates";
 import { parseWorkingDays } from "@/lib/working-days";
@@ -110,6 +111,7 @@ export async function createUpdate(actor: A, raw: unknown, opts: Opts & { source
       },
     });
     await replaceContent(tx, actor.organizationId, created.id, content);
+    if (input.goalIds?.length) await setUpdateGoalLinks(tx, actor, created.id, input.goalIds);
     if (input.submit) await submit(tx, actor, created.id, day, content, now, cfg);
     return { id: created.id, status: (input.submit ? "SUBMITTED" : "DRAFT") as UpdateStatus };
   }).catch((e) => {
@@ -150,6 +152,10 @@ export async function updateUpdate(actor: A, id: string, raw: unknown, opts: Opt
     if (!row) throw notFound("Update");
     const cfg = await orgContext(tx, actor.organizationId);
     const day = row.updateDate;
+
+    // Goal tags are metadata about the work, not the report itself: the owner can adjust them at any time.
+    if (patch.goalIds) await setUpdateGoalLinks(tx, actor, id, patch.goalIds);
+    if (patch.goalIds && !patch.sections && !patch.links && !patch.submit) return { id, status: row.status, changed: false };
 
     const current = await loadContent(tx, actor.organizationId, id);
     const next: Content = {
@@ -223,6 +229,7 @@ const detailInclude = {
   items: { orderBy: { position: "asc" } },
   attachments: { orderBy: { position: "asc" } },
   revisions: { orderBy: { revisionNumber: "asc" } },
+  goalLinks: { select: { objective: { select: { id: true, title: true, level: true } } } },
   membership: {
     select: {
       id: true,
@@ -260,6 +267,7 @@ export function toDetailDto(row: DetailRow, editWindowHours?: number, now: Date 
     updatedAt: row.updatedAt.toISOString(),
     sections,
     links: row.attachments.map((a) => ({ url: a.url, label: a.label })),
+    goals: row.goalLinks.map((g) => ({ id: g.objective.id, title: g.objective.title, level: g.objective.level })),
     revisions: row.revisions.map((r) => ({
       revisionNumber: r.revisionNumber,
       kind: r.kind,

@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { ArrowLeft } from "lucide-react";
+import { linkableGoals } from "@/server/services/goals";
 import { requirePageContext } from "@/server/auth/context";
 import { prisma } from "@/server/db";
 import { getOwnUpdate, getTodayStatus, MAX_BACKDATE_DAYS } from "@/server/services/updates";
@@ -29,6 +30,7 @@ export default async function EditUpdatePage({ params }: { params: Promise<{ id:
           mode="edit" id={id} status={u.status} updateDate={u.updateDate} minDate={addDays(today, -MAX_BACKDATE_DAYS)} maxDate={today}
           initial={{ workedOn: u.sections.WORKED_ON.length ? u.sections.WORKED_ON : [""], completed: u.sections.COMPLETED, pending: u.sections.PENDING, blockers: u.sections.BLOCKER, nextPriorities: u.sections.NEXT_PRIORITY }}
           initialLinks={u.links.map((l) => ({ url: l.url, label: l.label ?? "" }))}
+          goals={await linkableGoals(ctx)} initialGoalIds={u.goals.map((g) => g.id)}
           editableUntilLabel={u.editableUntil ? formatInstant(u.editableUntil, org.timezone) : null}
         />
       </div>

@@ -185,3 +185,74 @@ test.describe.serial("Daymark goals: cascade, progress, visibility, org chart", 
     expect(await noHScroll(page), "goal detail overflows").toBe(true);
   });
 });
+
+test.describe.serial("Daymark insights: tagging work to goals, comparing peers, profiles", () => {
+  const tag2 = uniq();
+  const a = { org: `Insight ${tag2}`, name: "Ivy Insight", email: `ivy-${tag2}@ins.test` };
+  const p1 = { name: "Pia Peer", email: `pia-${tag2}@ins.test` };
+  const p2 = { name: "Paz Peer", email: `paz-${tag2}@ins.test` };
+  let api: Awaited<ReturnType<typeof createOrgApi>>;
+  let goalId = "";
+
+  test.beforeAll(async () => {
+    api = await createOrgApi(A, a);
+    await addMemberApi(A, api, { role: "EMPLOYEE", ...p1 });
+    await addMemberApi(A, api, { role: "EMPLOYEE", ...p2 });
+    const g = await api.post("/api/objectives", { data: { title: "Improve onboarding", level: "COMPANY", periodStart: "2020-01-01", periodEnd: "2099-12-31" } });
+    expect(g.ok(), await g.text()).toBeTruthy();
+    goalId = (await g.json()).id;
+    await api.patch("/api/organization/settings", { data: { visibilityScope: "COMPANY" } });
+  });
+
+  test("8. an employee tags today's update with a goal, and it shows on the goal as recent work", async ({ browser }) => {
+    const page = await (await newCtx(browser, A)).newPage();
+    await login(page, p1.email);
+    await expect(page.getByRole("heading", { name: /^Welcome,/ })).toBeVisible();
+    await page.goto("/my-updates/new");
+    await page.getByLabel("What did you work on today?").first().fill("Rewrote the welcome checklist");
+    await page.getByLabel("Improve onboarding").check();
+    await page.getByRole("button", { name: "Submit update" }).click();
+    await expect(page.getByText("Rewrote the welcome checklist")).toBeVisible();
+    await expect(page.getByRole("link", { name: "Improve onboarding" })).toBeVisible();          // the "contributes to" tag
+    await page.goto(`/goals/${goalId}`);
+    await expect(page.getByText("Recent work")).toBeVisible();
+    await expect(page.getByRole("link", { name: "Rewrote the welcome checklist" })).toBeVisible();
+  });
+
+  test("9. peers compare under company visibility; the page is read-only and carries no ranking", async ({ browser }) => {
+    const page = await (await newCtx(browser, A)).newPage();
+    await login(page, p2.email);
+    await expect(page.getByRole("heading", { name: /^Welcome,/ })).toBeVisible();
+    await page.getByRole("navigation", { name: "Main" }).first().getByRole("link", { name: "Compare" }).click();
+    await expect(page.getByRole("heading", { name: "Compare", level: 1 })).toBeVisible();
+    await page.getByRole("link", { name: "Everyone" }).click();
+    const table = page.getByTestId("compare-table");
+    await expect(table).toContainText("Pia Peer");
+    await expect(table).toContainText("Paz Peer");
+    await expect(page.getByText(/not .*rank people/i)).toBeVisible();
+    await expect(page.getByText(/rank #|leaderboard/i)).toHaveCount(0);
+    await page.getByRole("link", { name: "12 weeks" }).click();
+    await expect(page).toHaveURL(/weeks=12/);
+  });
+
+  test("10. a profile shows habits and goals, and the pages fit a phone", async ({ browser }) => {
+    const ctx = await browser.newContext({ baseURL: A, viewport: { width: 375, height: 740 }, extraHTTPHeaders: { "x-forwarded-for": "10.8.8.8" } });
+    const page = await ctx.newPage();
+    await login(page, p2.email);
+    await expect(page.getByRole("heading", { name: /^Welcome,/ })).toBeVisible();
+    await page.goto("/compare?group=all");
+    await page.getByRole("link", { name: "Pia Peer" }).first().click();
+    await expect(page.getByRole("heading", { name: "Pia Peer", level: 1 })).toBeVisible();
+    await expect(page.getByText("Reporting consistency")).toBeVisible();
+    await expect(page.getByText("Rewrote the welcome checklist")).toBeVisible();
+    for (const path of [page.url().replace(A, ""), "/compare?group=all", "/dashboard"]) { await page.goto(path); await expect(page.getByRole("heading", { level: 1 })).toBeVisible(); expect(await noHScroll(page), `${path} overflows`).toBe(true); }
+  });
+
+  test("11. a stranger from another company cannot open a profile", async ({ browser }) => {
+    const rival = await createOrgApi(A, { org: `Nope ${tag2}`, name: "Nia Nope", email: `nia-${tag2}@ins.test` });
+    const people = (await (await api.get("/api/employees?status=ACTIVE")).json()).employees as { id: string }[];
+    for (const p of people) expect((await rival.get(`/api/people/${p.id}/insights`)).status()).toBe(404);
+    expect(JSON.stringify(await (await rival.get("/api/insights?group=all")).json())).not.toContain("Pia");
+    void browser;
+  });
+});

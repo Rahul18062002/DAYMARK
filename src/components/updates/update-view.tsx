@@ -1,4 +1,5 @@
-import { ExternalLink, History } from "lucide-react";
+import Link from "next/link";
+import { ExternalLink, History, Target } from "lucide-react";
 import { Card, CardBody, CardHeader } from "@/components/ui/card";
 import { BlockerBadge, LateBadge, UpdateStatusBadge } from "./badges";
 import { formatDay, formatInstant } from "@/lib/dates";
@@ -57,6 +58,14 @@ export function UpdateView({ update, timezone, showEmployee }: { update: UpdateD
         </div>
         <CardBody className="space-y-6" data-testid="current-update">
           <SectionList sections={update.sections} />
+          {update.goals.length > 0 && (
+            <section aria-labelledby="sec-goals">
+              <h3 id="sec-goals" className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-muted">Contributes to</h3>
+              <ul className="flex flex-wrap gap-2">
+                {update.goals.map((g) => <li key={g.id}><Link href={`/goals/${g.id}`} className="inline-flex items-center gap-1.5 rounded-full bg-primary-soft px-2.5 py-1 text-xs font-medium text-primary hover:underline"><Target className="h-3 w-3" aria-hidden />{g.title}</Link></li>)}
+              </ul>
+            </section>
+          )}
           {update.links.length > 0 && (
             <section aria-labelledby="sec-links">
               <h3 id="sec-links" className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-muted">Supporting links</h3>

@@ -5,6 +5,9 @@ import { createDepartment, createTeam } from "@/server/services/structure";
 import {
   createKeyResult, createObjective, createTask, deleteKeyResult, deleteObjective, deleteTask, getObjective, listObjectives, myGoals, recordCheckIn, updateKeyResult, updateObjective, updateTask,
 } from "@/server/services/goals";
+import { createUpdate, getOwnUpdate, updateUpdate } from "@/server/services/updates";
+import { getTeamUpdate } from "@/server/services/team-updates";
+import { linkableGoals } from "@/server/services/goals";
 import { addMember, makeOrg, type TestCtx } from "./helpers";
 
 const NOW = new Date("2026-11-15T09:00:00Z"); // mid Q4 2026
@@ -259,5 +262,74 @@ describe("period and audit", () => {
     await updateTask(w.admin, t.id, { status: "DONE" });
     const actions = (await prisma.auditLog.findMany({ where: { organizationId: w.organizationId, action: { startsWith: "goal." } }, select: { action: true } })).map((a) => a.action);
     for (const a of ["goal.created", "goal.keyresult.created", "goal.checkin", "goal.task.created", "goal.task.updated"]) expect(actions).toContain(a);
+  });
+});
+
+describe("daily work tagged to goals", () => {
+  const work = (goalIds?: string[], extra: object = {}) => ({ sections: { workedOn: ["Cut over the first billing worker"] }, submit: true, ...(goalIds ? { goalIds } : {}), ...extra });
+
+  it("an update can be tagged with goals, shown to its owner, and seen on the goal's recent work", async () => {
+    const w = await world();
+    const u = await createUpdate(w.eva, work([w.mine.id, w.co.id]), { now: NOW });
+    expect((await getOwnUpdate(w.eva, u.id, { now: NOW })).goals.map((g) => g.id).sort()).toEqual([w.mine.id, w.co.id].sort());
+    const detail = await getObjective(w.eva, w.mine.id, { now: NOW });
+    expect(detail.recentWork).toEqual([expect.objectContaining({ updateId: u.id, employeeName: "Eva", isOwn: true, preview: "Cut over the first billing worker" })]);
+    // her manager sees it on the goal; an unrelated employee (visibility OWN) does not
+    expect((await getObjective(w.max, w.mine.id, { now: NOW })).recentWork).toHaveLength(1);
+    expect((await getObjective(w.sam, w.co.id, { now: NOW })).recentWork).toHaveLength(0);
+  });
+
+  it("goal tags can be changed after submitting, without touching the report or its history", async () => {
+    const w = await world();
+    const u = await createUpdate(w.eva, work([w.mine.id]), { now: NOW });
+    const revisionsBefore = await prisma.updateRevision.count({ where: { dailyUpdateId: u.id } });
+    const r = await updateUpdate(w.eva, u.id, { goalIds: [w.team.id] }, { now: new Date(NOW.getTime() + 30 * 86_400_000) });   // long after the edit window
+    expect(r).toMatchObject({ changed: false });
+    expect((await getOwnUpdate(w.eva, u.id, { now: NOW })).goals.map((g) => g.id)).toEqual([w.team.id]);
+    expect(await prisma.updateRevision.count({ where: { dailyUpdateId: u.id } })).toBe(revisionsBefore);
+    await updateUpdate(w.eva, u.id, { goalIds: [] }, { now: NOW });
+    expect((await getOwnUpdate(w.eva, u.id, { now: NOW })).goals).toEqual([]);
+  });
+
+  it("refuses goals the person can't see, cancelled goals, other companies' goals, and too many", async () => {
+    const w = await world();
+    await expect(createUpdate(w.eva, work([w.priv.id]), { now: NOW })).rejects.toMatchObject({ status: 400 });             // Sam's private goal
+    const other = await makeOrg("Rival2");
+    const theirs = await createObjective(other.admin, { title: "theirs", level: "COMPANY", ...P });
+    await expect(createUpdate(w.eva, work([theirs.id]), { now: NOW })).rejects.toMatchObject({ status: 400 });
+    await expect(createUpdate(w.eva, work(["nope"]), { now: NOW })).rejects.toMatchObject({ status: 400 });
+    await updateObjective(w.admin, w.dept.id, { status: "CANCELLED" });
+    await expect(createUpdate(w.eva, work([w.dept.id]), { now: NOW })).rejects.toMatchObject({ status: 400 });
+    await expect(createUpdate(w.eva, work(Array.from({ length: 11 }, (_, i) => `g${i}`)), { now: NOW })).rejects.toBeTruthy();
+    expect(await prisma.dailyUpdate.count({ where: { membershipId: w.eva.membershipId } })).toBe(0);                          // nothing half-saved
+  });
+
+  it("a colleague reading the update sees only the goal tags they could see anyway", async () => {
+    const w = await world();
+    await updateSettings({ ...w.admin, userId: w.admin.userId }, { visibilityScope: "TEAM" });
+    await createObjective(w.sam, { title: "Sam only", level: "INDIVIDUAL", ...P });                                         // Sam's, not visible to Ed/Eva under TEAM
+    const ed = (await addMember(w.admin, "EMPLOYEE", { name: "Ed", teamId: w.alpha.id, managerId: w.max.membershipId })).ctx;
+    const u = await createUpdate(w.eva, work([w.mine.id, w.team.id]), { now: NOW });
+    const asEd = await getTeamUpdate(ed, u.id, { now: NOW });
+    expect(asEd.goals.some((g) => g.id === w.team.id)).toBe(true);                                                            // the team goal: Ed is on that team
+    expect(asEd.goals.some((g) => g.id === w.mine.id)).toBe(true);                                                            // Eva's goal: her team peer may read it under TEAM visibility
+  });
+
+  it("deleting a goal removes its tags; the update itself stays", async () => {
+    const w = await world();
+    const u = await createUpdate(w.eva, work([w.mine.id]), { now: NOW });
+    await deleteObjective(w.eva, w.mine.id);
+    expect(await prisma.updateGoalLink.count({ where: { dailyUpdateId: u.id } })).toBe(0);
+    expect((await getOwnUpdate(w.eva, u.id, { now: NOW })).sections.WORKED_ON).toHaveLength(1);
+  });
+
+  it("offers the right goals to tag, the person's own first, and only ones in play today", async () => {
+    const w = await world();
+    await createObjective(w.admin, { title: "Old goal", level: "COMPANY", periodStart: "2025-01-01", periodEnd: "2025-03-31" });
+    const g = await linkableGoals(w.eva, { now: NOW });
+    expect(g[0]).toMatchObject({ id: w.mine.id, mine: true });
+    expect(g.some((x) => x.title === "Old goal")).toBe(false);
+    expect(g.some((x) => x.id === w.priv.id)).toBe(false);
+    expect(g.some((x) => x.id === w.co.id)).toBe(true);
   });
 });

@@ -129,6 +129,19 @@ export default async function GoalPage({ params }: { params: Promise<{ id: strin
               </ul>
             )}
           </Card>
+          <Card>
+            <CardHeader title="Recent work" description="Daily updates that were tagged to this goal." />
+            {g.recentWork.length === 0 ? <EmptyState icon={<ListChecks className="h-5 w-5" />} title="No work tagged yet" description="When people tag their daily updates with this goal, it shows up here." /> : (
+              <ul className="divide-y divide-border">
+                {g.recentWork.map((w) => (
+                  <li key={w.updateId} className="p-4">
+                    <div className="flex items-center justify-between gap-2 text-xs text-muted"><span className="font-medium text-foreground">{w.employeeName}{w.isOwn ? " (you)" : ""}</span><span>{formatDay(w.date, { day: "numeric", month: "short" })}</span></div>
+                    <Link href={w.isOwn ? `/my-updates/${w.updateId}` : `/team-updates/${w.updateId}`} className="mt-1 line-clamp-2 text-sm text-muted hover:text-primary hover:underline">{w.preview || "View update"}</Link>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </Card>
           <InfoNotice>Progress is each owner&apos;s own reading and hasn&apos;t been independently verified. Every change is recorded.</InfoNotice>
         </div>
       </div>

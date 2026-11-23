@@ -9,9 +9,10 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   const ctx = await requirePageContext();
   const state = (await getSessionState())!;
   const org = await prisma.organization.findFirst({ where: { id: ctx.organizationId }, select: { name: true } });
+  const teamView = await canOpenTeamView(prisma, ctx);
   return (
     <AppShell
-      items={navFor(ctx.role, { automations: (await automationsAccess(ctx)).allowed, teamView: await canOpenTeamView(prisma, ctx), orgChart: true, goals: true })}
+      items={navFor(ctx.role, { automations: (await automationsAccess(ctx)).allowed, teamView, orgChart: true, goals: true, compare: teamView })}
       orgName={org?.name ?? "Workspace"}
       user={{ name: state.userName, email: state.userEmail, roleLabel: ROLE_LABEL[ctx.role] }}
     >

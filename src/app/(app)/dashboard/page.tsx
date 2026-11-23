@@ -17,6 +17,7 @@ import { TrendChart } from "@/components/updates/trend-chart";
 import { Highlights } from "@/components/updates/highlights";
 import { WeekStrip } from "@/components/updates/week-strip";
 import { BlockerBadge, UpdateStatusBadge } from "@/components/updates/badges";
+import { GoalsSnapshot } from "@/components/goals/goals-snapshot";
 import { formatDay } from "@/lib/dates";
 
 export const metadata: Metadata = { title: "Dashboard" };
@@ -52,6 +53,7 @@ async function AdminDashboard({ first }: { first: string }) {
         <Stat label="Teams" icon={<Network className="h-4 w-4" />} value={o.teams} />
         <Stat label="Pending invitations" icon={<UserCheck className="h-4 w-4" />} value={o.pendingInvites} />
       </div>
+      <div className="mt-6"><GoalsSnapshot ctx={ctx} /></div>
       <h2 className="mb-3 mt-8 text-sm font-semibold">Update submissions today</h2>
       <OverviewCards o={upd} />
       <Card className="mt-4">
@@ -130,6 +132,7 @@ async function ManagerDashboard({ first }: { first: string }) {
           )}
         </Card>
       </div>
+      <div className="mt-6"><GoalsSnapshot ctx={ctx} /></div>
       <div className="mt-6"><Highlights h={highlights} /></div>
     </>
   );
@@ -179,6 +182,7 @@ async function EmployeeDashboard({ first }: { first: string }) {
           <CardHeader title="Latest summary" />
           <EmptyState icon={<Sparkles className="h-5 w-5" />} title="No summary yet" description="When AI summaries are enabled for your organization, the latest one will appear here." />
         </Card>
+        <div className="lg:col-span-2"><GoalsSnapshot ctx={ctx} /></div>
         <Card className="lg:col-span-2">
           <CardHeader title="Your profile" />
           <dl className="grid divide-y divide-border text-sm sm:grid-cols-4 sm:divide-x sm:divide-y-0">

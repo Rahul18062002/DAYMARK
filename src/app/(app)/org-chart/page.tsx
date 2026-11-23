@@ -19,7 +19,7 @@ function NodeRow({ n }: { n: OrgNode }) {
       <Avatar name={n.name} />
       <div className="min-w-0 flex-1">
         <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
-          <span className="truncate text-sm font-semibold">{n.name}{n.isSelf && <span className="ml-1.5 text-xs font-normal text-muted">(you)</span>}</span>
+          <Link href={`/people/${n.id}`} className="truncate text-sm font-semibold hover:text-primary hover:underline">{n.name}{n.isSelf && <span className="ml-1.5 text-xs font-normal text-muted">(you)</span>}</Link>
           <Badge tone={roleTone[n.role]}>{roleLabel[n.role]}</Badge>
           {n.level !== null && <Badge>Level {n.level}</Badge>}
         </div>

@@ -25,6 +25,9 @@ export type FormProps = {
   initial: Sections;
   initialLinks: LinkRow[];
   editableUntilLabel?: string | null;
+  /** Goals the person could tag this work with (active, readable, in play today), and the ones already tagged. */
+  goals?: { id: string; title: string; level: string; mine: boolean }[];
+  initialGoalIds?: string[];
 };
 
 const clean = (v: string[]) => v.map((s) => s.trim()).filter(Boolean);
@@ -34,6 +37,7 @@ export function UpdateForm(p: FormProps) {
   const [date, setDate] = useState(p.updateDate);
   const [s, setS] = useState<Sections>(p.initial);
   const [links, setLinks] = useState<LinkRow[]>(p.initialLinks);
+  const [goalIds, setGoalIds] = useState<string[]>(p.initialGoalIds ?? []);
   const [busy, setBusy] = useState<"draft" | "submit" | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [existingId, setExistingId] = useState<string | null>(null);
@@ -45,6 +49,7 @@ export function UpdateForm(p: FormProps) {
     return {
       sections: { workedOn: clean(s.workedOn), completed: clean(s.completed), pending: clean(s.pending), blockers: clean(s.blockers), nextPriorities: clean(s.nextPriorities) },
       links: links.map((l) => ({ url: l.url.trim(), label: l.label.trim() || undefined })).filter((l) => l.url),
+      goalIds,
       submit,
     };
   }
@@ -64,7 +69,7 @@ export function UpdateForm(p: FormProps) {
         if (submit) { router.push(`/my-updates/${r.id}?submitted=1`); }
         else { toast.success("Draft saved"); router.push(`/my-updates/${r.id}/edit`); }
       } else {
-        const r = await api<{ status: string; changed: boolean }>(`/api/updates/${p.id}`, { method: "PATCH", body: isLive ? { sections: payload(true).sections, links: payload(true).links } : payload(submit) });
+        const r = await api<{ status: string; changed: boolean }>(`/api/updates/${p.id}`, { method: "PATCH", body: isLive ? { sections: payload(true).sections, links: payload(true).links, goalIds } : payload(submit) });
         if (submit && !isLive) router.push(`/my-updates/${p.id}?submitted=1`);
         else if (isLive) { if (r.changed) router.push(`/my-updates/${p.id}?edited=1`); else { toast.message("No changes to save"); setBusy(null); } }
         else { toast.success("Draft saved"); setBusy(null); }
@@ -106,6 +111,22 @@ export function UpdateForm(p: FormProps) {
           <ListField id="pending" label="What work is still pending?" values={s.pending} onChange={set("pending")} />
           <ListField id="blockers" label="What challenges or blockers did you face?" values={s.blockers} onChange={set("blockers")} hint="Leave empty if there were none." />
           <ListField id="nextPriorities" label="What are your priorities for tomorrow?" values={s.nextPriorities} onChange={set("nextPriorities")} />
+
+          {(p.goals?.length ?? 0) > 0 && (
+            <fieldset className="space-y-2">
+              <legend className="text-sm font-medium">Which goals did this move forward? <span className="font-normal text-muted">(optional)</span></legend>
+              <p className="text-xs text-muted">Tag your work so it counts towards the goals it supports. Your own goals are listed first.</p>
+              <div className="max-h-48 space-y-1 overflow-y-auto rounded-lg border border-border p-2">
+                {p.goals!.map((g) => (
+                  <label key={g.id} className="flex cursor-pointer items-start gap-2 rounded px-2 py-1.5 text-sm hover:bg-surface-muted">
+                    <input type="checkbox" className="mt-0.5" checked={goalIds.includes(g.id)} disabled={!goalIds.includes(g.id) && goalIds.length >= 10}
+                      onChange={(e) => setGoalIds((cur) => (e.target.checked ? [...cur, g.id] : cur.filter((x) => x !== g.id)))} />
+                    <span className="min-w-0"><span className="block truncate">{g.title}</span><span className="text-xs text-muted">{g.mine ? "Your goal · " : ""}{g.level.charAt(0) + g.level.slice(1).toLowerCase()}</span></span>
+                  </label>
+                ))}
+              </div>
+            </fieldset>
+          )}
 
           <fieldset className="space-y-2">
             <legend className="text-sm font-medium">Supporting links <span className="font-normal text-muted">(optional)</span></legend>

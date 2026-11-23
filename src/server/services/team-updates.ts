@@ -5,11 +5,14 @@ import { badRequest, notFound } from "../errors";
 import { teamUpdateFilterSchema } from "../validation";
 import { addDays, daysBetween, isoWeekday, localDay, weekStart } from "@/lib/dates";
 import { parseWorkingDays } from "@/lib/working-days";
+import { readableGoals } from "./goals";
 import { detailInclude, maskDetail, toDetailDto } from "./updates";
 
 type Opts = { now?: Date };
-export const MAX_RANGE_DAYS = 31;
-const MAX_ROWS = 500;
+/** A quarter at most per request; results are paged. Beyond HARD_ROW_CAP rows the caller is asked to narrow the filters. */
+export const MAX_RANGE_DAYS = 92;
+const HARD_ROW_CAP = 30_000;
+const DEFAULT_PAGE_SIZE = 100;
 
 async function cfgOf(organizationId: string) {
   const org = await prisma.organization.findUniqueOrThrow({ where: { id: organizationId }, include: { settings: true } });
@@ -36,7 +39,8 @@ export async function getTeamUpdate(actor: Actor, id: string, opts: Opts = {}) {
   });
   if (!row) throw notFound("Update");
   // Peers see the work, not the person's contact details; blockers follow the company's setting.
-  return maskDetail(toDetailDto(row, undefined, opts.now), { hideBlockers: !vs.blockersFor(row.membershipId), hideEmail: !vs.isManagement });
+  const dto = toDetailDto(row, undefined, opts.now);
+  return maskDetail({ ...dto, goals: await readableGoals(actor, dto.goals) }, { hideBlockers: !vs.blockersFor(row.membershipId), hideEmail: !vs.isManagement });
 }
 
 export type TeamRow = {
@@ -73,32 +77,40 @@ export async function listTeamUpdates(actor: Actor, rawFilters: unknown = {}, op
   // "Not submitted" is for people who manage; peers only ever read submitted work.
   const wantMissing = vs.isManagement && (!f.status || f.status === "missing");
 
-  const updates = await prisma.dailyUpdate.findMany({
-    where: {
-      organizationId: actor.organizationId,
-      updateDate: { gte: from, lte: to },
-      status: f.status === "submitted" ? "SUBMITTED" : f.status === "edited" ? "EDITED" : { in: ["SUBMITTED", "EDITED"] },
-      hasBlockers: f.blockers ? true : undefined,
-      // A blockers filter must not reveal blockers the actor may not read.
-      ...(f.blockers && vs.blockerMembershipIds ? { membershipId: { in: vs.blockerMembershipIds } } : {}),
-      membership: { is: { AND: [scope, memberFilter] } },
-    },
-    orderBy: [{ updateDate: "desc" }, { updatedAt: "desc" }],
-    take: MAX_ROWS + 1,
-    include: {
-      items: { where: { section: "WORKED_ON" }, orderBy: { position: "asc" }, take: 1 },
-      membership: { select: { user: { select: { name: true } }, team: { select: { name: true } }, department: { select: { name: true } } } },
-    },
-  });
+  // Light query first (no relation includes, so there is no per-row IN list and it stays inside SQLite's
+  // parameter limit for a whole quarter of a big company). Names come from one scoped membership query.
+  const [updates, people] = await Promise.all([
+    prisma.dailyUpdate.findMany({
+      where: {
+        organizationId: actor.organizationId,
+        updateDate: { gte: from, lte: to },
+        status: f.status === "submitted" ? "SUBMITTED" : f.status === "edited" ? "EDITED" : { in: ["SUBMITTED", "EDITED"] },
+        hasBlockers: f.blockers ? true : undefined,
+        // A blockers filter must not reveal blockers the actor may not read.
+        ...(f.blockers && vs.blockerMembershipIds ? { membershipId: { in: vs.blockerMembershipIds } } : {}),
+        membership: { is: { AND: [scope, memberFilter] } },
+      },
+      orderBy: [{ updateDate: "desc" }, { updatedAt: "desc" }],
+      take: HARD_ROW_CAP + 1,
+      select: { id: true, membershipId: true, updateDate: true, status: true, hasBlockers: true, submittedLate: true, firstSubmittedAt: true, lastEditedAt: true, updatedAt: true },
+    }),
+    prisma.membership.findMany({
+      where: { AND: [scope, memberFilter] },
+      select: { id: true, user: { select: { name: true } }, team: { select: { name: true } }, department: { select: { name: true } } },
+    }),
+  ]);
+  if (updates.length > HARD_ROW_CAP) throw badRequest("That is more than we can show at once. Narrow the dates or add a filter.");
+  const who = new Map(people.map((m) => [m.id, { name: m.user.name, team: m.team?.name ?? null, dept: m.department?.name ?? null }]));
 
   const rows: TeamRow[] = wantUpdates
-    ? updates.map((u) => ({
-        key: u.id, updateId: u.id, membershipId: u.membershipId, employeeName: u.membership.user.name,
-        teamName: u.membership.team?.name ?? null, departmentName: u.membership.department?.name ?? null,
-        date: u.updateDate, status: u.status as "SUBMITTED" | "EDITED", hasBlockers: u.hasBlockers && vs.blockersFor(u.membershipId),
-        submittedLate: u.submittedLate, lastUpdatedAt: (u.lastEditedAt ?? u.firstSubmittedAt ?? u.updatedAt).toISOString(),
-        preview: u.items[0]?.text ?? "",
-      }))
+    ? updates.map((u) => {
+        const w = who.get(u.membershipId);
+        return {
+          key: u.id, updateId: u.id, membershipId: u.membershipId, employeeName: w?.name ?? "Unknown", teamName: w?.team ?? null, departmentName: w?.dept ?? null,
+          date: u.updateDate, status: u.status as "SUBMITTED" | "EDITED", hasBlockers: u.hasBlockers && vs.blockersFor(u.membershipId),
+          submittedLate: u.submittedLate, lastUpdatedAt: (u.lastEditedAt ?? u.firstSubmittedAt ?? u.updatedAt).toISOString(), preview: "",
+        };
+      })
     : [];
 
   if (wantMissing && !f.blockers) {
@@ -109,7 +121,7 @@ export async function listTeamUpdates(actor: Actor, rawFilters: unknown = {}, op
       (await prisma.dailyUpdate.findMany({
         where: {
           organizationId: actor.organizationId, status: { in: ["SUBMITTED", "EDITED"] },
-          updateDate: { gte: from, lte: to }, membershipId: { in: members.map((m) => m.id) },
+          updateDate: { gte: from, lte: to }, membership: { is: { AND: [scope, memberFilter, { status: "ACTIVE" }] } },
         },
         select: { membershipId: true, updateDate: true },
       })).map((u) => `${u.membershipId}|${u.updateDate}`),
@@ -119,6 +131,7 @@ export async function listTeamUpdates(actor: Actor, rawFilters: unknown = {}, op
       for (const m of members) {
         if (localDay(m.createdAt, cfg.tz) > day) continue;
         if (submittedKeys.has(`${m.id}|${day}`)) continue;
+        if (rows.length > HARD_ROW_CAP) throw badRequest("That is more than we can show at once. Narrow the dates or add a filter.");
         rows.push({
           key: `missing|${m.id}|${day}`, updateId: null, membershipId: m.id, employeeName: m.user.name,
           teamName: m.team?.name ?? null, departmentName: m.department?.name ?? null, date: day, status: "MISSING",
@@ -129,8 +142,21 @@ export async function listTeamUpdates(actor: Actor, rawFilters: unknown = {}, op
   }
 
   rows.sort((a, b) => b.date.localeCompare(a.date) || (a.status === "MISSING" ? -1 : 0) - (b.status === "MISSING" ? -1 : 0) || a.employeeName.localeCompare(b.employeeName));
-  const truncated = rows.length > MAX_ROWS;
-  return { from, to, today, rows: rows.slice(0, MAX_ROWS), truncated, canSeeMissing: vs.isManagement };
+  if (rows.length > HARD_ROW_CAP) throw badRequest("That is more than we can show at once. Narrow the dates or add a filter.");
+  const pageSize = f.pageSize ?? DEFAULT_PAGE_SIZE;
+  const total = rows.length;
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  const page = Math.min(f.page ?? 1, totalPages);
+  const pageRows = rows.slice((page - 1) * pageSize, page * pageSize);
+
+  // Only the rows on this page need their first line of text.
+  const ids = pageRows.flatMap((r) => (r.updateId ? [r.updateId] : []));
+  if (ids.length) {
+    const previews = await prisma.updateItem.findMany({ where: { organizationId: actor.organizationId, dailyUpdateId: { in: ids }, section: "WORKED_ON", position: 0 }, select: { dailyUpdateId: true, text: true } });
+    const byUpdate = new Map(previews.map((p) => [p.dailyUpdateId, p.text]));
+    for (const r of pageRows) if (r.updateId) r.preview = byUpdate.get(r.updateId) ?? "";
+  }
+  return { from, to, today, rows: pageRows, total, page, pageSize, totalPages, truncated: false, canSeeMissing: vs.isManagement };
 }
 
 /** Cards for one day: team size, submitted, pending, blockers, plus weekly activity. */

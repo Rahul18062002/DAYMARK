@@ -173,6 +173,7 @@ export async function getObjective(actor: Actor, id: string, opts: { now?: Date 
     })),
     canManage: manage,
     canAddTask: manage || canRead(v, row),
+    recentWork: await recentWorkOnGoal(actor, id),
   };
 }
 
@@ -429,4 +430,55 @@ export async function goalFormOptions(actor: Actor) {
   ]);
   const levels: Level[] = v.isAdmin ? ["COMPANY", "DEPARTMENT", "TEAM", "INDIVIDUAL"] : actor.role === "MANAGER" ? ["DEPARTMENT", "TEAM", "INDIVIDUAL"] : ["INDIVIDUAL"];
   return { people: people.map((p) => ({ id: p.id, name: p.user.name })), teams, departments, levels, selfId: actor.membershipId };
+}
+
+// ───────────────────────────── daily work ↔ goals ─────────────────────────────
+
+/** Replace the goals an update contributes to. Each must be readable by the author and still active (or already linked). */
+export async function setUpdateGoalLinks(tx: Tx, actor: Actor, updateId: string, goalIds: string[]) {
+  const ids = [...new Set(goalIds)];
+  if (ids.length) {
+    const v = await viewer(tx, actor);
+    const existing = new Set((await tx.updateGoalLink.findMany({ where: { organizationId: actor.organizationId, dailyUpdateId: updateId }, select: { objectiveId: true } })).map((l) => l.objectiveId));
+    const found = await tx.objective.findMany({ where: { organizationId: actor.organizationId, id: { in: ids } }, select: { id: true, level: true, ownerId: true, teamId: true, departmentId: true, status: true } });
+    const bad = ids.filter((id) => { const o = found.find((f) => f.id === id); return !o || !canRead(v, o) || (o.status !== "ACTIVE" && !existing.has(id)); });
+    if (bad.length) throw badRequest("Choose goals you can see that are still active.", { goalIds: "Some goals can't be linked" });
+  }
+  await tx.updateGoalLink.deleteMany({ where: { organizationId: actor.organizationId, dailyUpdateId: updateId } });
+  if (ids.length) await tx.updateGoalLink.createMany({ data: ids.map((objectiveId) => ({ organizationId: actor.organizationId, dailyUpdateId: updateId, objectiveId })) });
+}
+
+/** Of these goals, the ones the actor may read (used to show a colleague's update with only the goal tags they could see anyway). */
+export async function readableGoals<T extends { id: string }>(actor: Actor, goals: T[]): Promise<T[]> {
+  if (goals.length === 0) return goals;
+  const v = await viewer(prisma, actor);
+  const rows = await prisma.objective.findMany({ where: { organizationId: actor.organizationId, id: { in: goals.map((g) => g.id) } }, select: { id: true, level: true, ownerId: true, teamId: true, departmentId: true } });
+  const ok = new Set(rows.filter((o) => canRead(v, o)).map((o) => o.id));
+  return goals.filter((g) => ok.has(g.id));
+}
+
+/** Goals the actor can tag an update with: active, readable, in play today. Their own first. */
+export async function linkableGoals(actor: Actor, opts: { now?: Date } = {}) {
+  const day = await today(prisma, actor.organizationId, opts.now);
+  const v = await viewer(prisma, actor);
+  const rows = await prisma.objective.findMany({
+    where: { AND: [whereReadable(v), { status: "ACTIVE", periodStart: { lte: day }, periodEnd: { gte: day } }] },
+    select: { id: true, title: true, level: true, ownerId: true }, take: 200,
+  });
+  return rows.sort((a, b) => (a.ownerId === actor.membershipId ? 0 : 1) - (b.ownerId === actor.membershipId ? 0 : 1) || levelRank(a.level as Level) - levelRank(b.level as Level) || a.title.localeCompare(b.title))
+    .map((o) => ({ id: o.id, title: o.title, level: o.level as Level, mine: o.ownerId === actor.membershipId }));
+}
+
+/** Recent work that was tagged to a goal, limited to people the viewer may read (plus themselves). */
+export async function recentWorkOnGoal(actor: Actor, objectiveId: string, limit = 8) {
+  const v = await viewer(prisma, actor);
+  const links = await prisma.updateGoalLink.findMany({
+    where: {
+      organizationId: actor.organizationId, objectiveId,
+      dailyUpdate: { is: { status: { in: ["SUBMITTED", "EDITED"] }, ...(v.isAdmin ? {} : { membershipId: { in: [...v.readIds!] } }) } },
+    },
+    orderBy: { dailyUpdate: { updateDate: "desc" } }, take: limit,
+    select: { dailyUpdate: { select: { id: true, updateDate: true, membershipId: true, membership: { select: { user: { select: { name: true } } } }, items: { where: { section: "WORKED_ON" }, orderBy: { position: "asc" }, take: 1, select: { text: true } } } } },
+  });
+  return links.map((l) => ({ updateId: l.dailyUpdate.id, date: l.dailyUpdate.updateDate, employeeName: l.dailyUpdate.membership.user.name, isOwn: l.dailyUpdate.membershipId === actor.membershipId, preview: l.dailyUpdate.items[0]?.text ?? "" }));
 }

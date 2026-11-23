@@ -31,7 +31,7 @@ export default async function TeamUpdatesPage({ searchParams }: { searchParams: 
   if (!can(ctx, "update:team") || !(await canOpenTeamView(prisma, ctx))) redirect("/dashboard");
   const sp = await searchParams;
   const filters = Object.fromEntries(
-    (["from", "to", "departmentId", "teamId", "membershipId", "status", "blockers"] as const).flatMap((k) => (one(sp[k]) ? [[k, one(sp[k])!]] : [])),
+    (["from", "to", "departmentId", "teamId", "membershipId", "status", "blockers", "page"] as const).flatMap((k) => (one(sp[k]) ? [[k, one(sp[k])!]] : [])),
   );
 
   let list: Awaited<ReturnType<typeof listTeamUpdates>> | null = null;
@@ -41,7 +41,8 @@ export default async function TeamUpdatesPage({ searchParams }: { searchParams: 
 
   const [overview, trend, highlights, options] = await Promise.all([teamOverview(ctx), teamTrend(ctx), teamHighlights(ctx), filterOptions(ctx)]);
   const rows = list?.rows ?? [];
-  const filtered = Object.keys(filters).length > 0;
+  const filtered = Object.keys(filters).filter((k) => k !== "page").length > 0;
+  const pageHref = (n: number) => `/team-updates?${new URLSearchParams({ ...Object.fromEntries(Object.entries(filters).filter(([k]) => k !== "page")), page: String(n) }).toString()}`;
 
   return (
     <>
@@ -88,8 +89,7 @@ export default async function TeamUpdatesPage({ searchParams }: { searchParams: 
         {list && (
           <>
             <div className="flex flex-wrap items-center justify-between gap-2 px-5 py-3 text-xs text-muted" aria-live="polite">
-              <span>{rows.length} {rows.length === 1 ? "result" : "results"} · {list.from === list.to ? formatDay(list.from) : `${formatDay(list.from, { day: "numeric", month: "short" })} – ${formatDay(list.to, { day: "numeric", month: "short" })}`}</span>
-              {list.truncated && <span>Showing the first {rows.length}. Narrow the filters to see the rest.</span>}
+              <span>{list.total} {list.total === 1 ? "result" : "results"}{list.totalPages > 1 ? ` · page ${list.page} of ${list.totalPages}` : ""} · {list.from === list.to ? formatDay(list.from) : `${formatDay(list.from, { day: "numeric", month: "short" })} – ${formatDay(list.to, { day: "numeric", month: "short" })}`}</span>
             </div>
             {rows.length === 0 ? (
               <EmptyState icon={<ClipboardList className="h-5 w-5" />} title="Nothing to show" description={filtered ? "No updates match these filters. Try widening the dates or clearing a filter." : "Updates from your team will appear here once they're submitted."} />
@@ -127,6 +127,13 @@ export default async function TeamUpdatesPage({ searchParams }: { searchParams: 
                     </li>
                   ))}
                 </ul>
+                {list.totalPages > 1 && (
+                  <nav aria-label="Pages" className="flex items-center justify-between gap-3 border-t border-border px-5 py-3 text-sm">
+                    {list.page > 1 ? <Link href={pageHref(list.page - 1)} className="font-medium text-primary hover:underline">← Previous</Link> : <span className="text-muted">← Previous</span>}
+                    <span className="tabular text-xs text-muted">Page {list.page} of {list.totalPages}</span>
+                    {list.page < list.totalPages ? <Link href={pageHref(list.page + 1)} className="font-medium text-primary hover:underline">Next →</Link> : <span className="text-muted">Next →</span>}
+                  </nav>
+                )}
               </>
             )}
           </>
