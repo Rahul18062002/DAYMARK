@@ -3,7 +3,7 @@ import { prisma } from "../db";
 import { audit } from "../audit";
 import type { Actor } from "../policy";
 import { assertCan } from "../policy";
-import { conflict, notFound } from "../errors";
+import { badRequest, conflict, notFound } from "../errors";
 import { auth, withUserCreation } from "../auth/auth";
 import { formatWorkingDays, parseWorkingDays } from "@/lib/working-days";
 import { onboardingSchema, settingsSchema, updateOrganizationSchema } from "../validation";
@@ -99,6 +99,12 @@ export async function updateSettings(actor: Actor & { userId: string }, input: u
   assertCan(actor, "org:settings");
   const data = settingsSchema.parse(input);
   const { workingDays, ...rest } = data;
+  if (data.reminderTime !== undefined || data.updateCutoffTime !== undefined || data.reminderEnabled !== undefined) {
+    const cur = await prisma.orgSettings.findUnique({ where: { organizationId: actor.organizationId }, select: { reminderTime: true, updateCutoffTime: true, reminderEnabled: true } });
+    const reminder = data.reminderTime ?? cur?.reminderTime ?? "16:00", cutoff = data.updateCutoffTime ?? cur?.updateCutoffTime ?? "18:00";
+    // Only matters while reminders are on: with them off, any cut-off is fine.
+    if ((data.reminderEnabled ?? cur?.reminderEnabled ?? false) && reminder >= cutoff) throw badRequest("The reminder time must be earlier than the daily cut-off.", { reminderTime: "Must be earlier than the cut-off time" });
+  }
   const row = { ...rest, ...(workingDays ? { workingDays: formatWorkingDays(workingDays) } : {}) };
   return prisma.$transaction(async (tx) => {
     const stored = await tx.orgSettings.upsert({

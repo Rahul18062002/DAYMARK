@@ -49,6 +49,8 @@ export const settingsSchema = z
       .min(1, "Pick at least one working day")
       .transform((d) => [...new Set(d)].sort()),
     aiEnabled: z.boolean(),
+    reminderEnabled: z.boolean(),
+    reminderTime: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, "Use HH:MM (24-hour)"),
     visibilityScope: z.enum(["OWN", "TEAM", "DEPARTMENT", "COMPANY"]),
     peersSeeBlockers: z.boolean(),
   })

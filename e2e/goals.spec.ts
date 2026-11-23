@@ -255,4 +255,22 @@ test.describe.serial("Daymark insights: tagging work to goals, comparing peers, 
     expect(JSON.stringify(await (await rival.get("/api/insights?group=all")).json())).not.toContain("Pia");
     void browser;
   });
+
+  test("12. an admin switches on the daily reminder, and the settings refuse a time at or after the cut-off", async ({ browser }) => {
+    const page = await (await newCtx(browser, A)).newPage();
+    await login(page, a.email);
+    await expect(page.getByRole("heading", { name: /^Welcome,/ })).toBeVisible();
+    await page.goto("/settings?tab=schedule");
+    await expect(page.getByLabel("Reminder time")).toHaveCount(0);                          // hidden until reminders are on
+    await page.getByLabel(/Remind people who haven't submitted/).check();
+    await page.getByLabel("Reminder time").fill("15:30");
+    await page.getByRole("button", { name: "Save schedule" }).click();
+    await expect(page.getByText("Settings saved.")).toBeVisible();
+    await page.reload();
+    await expect(page.getByLabel(/Remind people who haven't submitted/)).toBeChecked();
+    await expect(page.getByLabel("Reminder time")).toHaveValue("15:30");
+    await page.getByLabel("Reminder time").fill("18:30");                                    // default cut-off is 18:00
+    await page.getByRole("button", { name: "Save schedule" }).click();
+    await expect(page.getByText("The reminder time must be earlier than the daily cut-off.").first()).toBeVisible();
+  });
 });

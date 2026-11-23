@@ -25,7 +25,7 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
       <SettingsTabs
         initialTab={sp.tab === "structure" || sp.tab === "schedule" || sp.tab === "visibility" ? sp.tab : "organization"}
         org={{ name: org.name, timezone: org.timezone, logoUrl: org.logoUrl ?? "" }}
-        settings={{ updateCutoffTime: s?.updateCutoffTime ?? "18:00", editWindowHours: s?.editWindowHours ?? 24, workingDays: parseWorkingDays(s?.workingDays), aiEnabled: s?.aiEnabled ?? true, visibilityScope: s?.visibilityScope ?? "OWN", peersSeeBlockers: s?.peersSeeBlockers ?? false }}
+        settings={{ updateCutoffTime: s?.updateCutoffTime ?? "18:00", editWindowHours: s?.editWindowHours ?? 24, workingDays: parseWorkingDays(s?.workingDays), aiEnabled: s?.aiEnabled ?? true, visibilityScope: s?.visibilityScope ?? "OWN", peersSeeBlockers: s?.peersSeeBlockers ?? false, reminderEnabled: s?.reminderEnabled ?? false, reminderTime: s?.reminderTime ?? "16:00" }}
         departments={departments}
         teams={teams}
         managers={managers}

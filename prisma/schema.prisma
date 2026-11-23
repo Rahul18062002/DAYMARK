@@ -193,6 +193,10 @@ model OrgSettings {
   visibilityScope  VisibilityScope @default(OWN)
   // Blockers are the most sensitive part of an update: peers only see them when this is on.
   peersSeeBlockers Boolean     @default(false)
+  // Reminders (sent through viaSocket automations): one time of day for the whole organization, in its timezone,
+  // on working days, before the cut-off. Off until an admin turns it on.
+  reminderEnabled  Boolean     @default(false)
+  reminderTime     String      @default("16:00")
   // Automations (viaSocket): admins always have access; managers only when this is on.
   automationsManagerAccess     Boolean @default(false)
   // Off by default: blocker free-text is only sent to automations if the company opts in.
@@ -426,6 +430,7 @@ enum IntegrationEventType {
   UPDATE_SUBMITTED
   UPDATE_BLOCKER_REPORTED
   UPDATE_MISSING
+  UPDATE_REMINDER
 }
 
 enum DeliveryStatus {

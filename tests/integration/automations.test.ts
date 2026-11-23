@@ -11,6 +11,8 @@ import {
   MAX_ATTEMPTS, RETRY_DELAYS_MS, processDelivery, purgeOldIntegrationData, setDispatchDepsForTests, sweepDeliveries,
 } from "@/server/integrations/viasocket/dispatch";
 import { runMissingUpdateCheck } from "@/server/integrations/viasocket/missing";
+import { updateSettings } from "@/server/services/organization";
+import { runReminderCheck } from "@/server/integrations/viasocket/reminders";
 import { runIntegrationCron } from "@/server/integrations/viasocket/cron";
 import { withJobLock } from "@/server/job-lock";
 import { automationsAccess } from "@/server/integrations/viasocket/access";
@@ -889,5 +891,130 @@ describe("K. docs/automation-events.md documents every field", () => {
     for (const f of EVENT_FIELDS.UPDATE_SUBMITTED.slice(0, 6)) expect(md).toContain(f.path.split(".").at(-1)!);
     expect(md).toMatch(/At-least-once/);
     expect(md).toMatch(/eventId/);
+  });
+});
+
+
+// ── L. daily reminders ──────────────────────────────────────────────────────────────────────────
+describe("L. Daily reminders (one organization-wide time, timezone and working-day aware)", () => {
+  // Org timezone in these tests: Asia/Kolkata (UTC+5:30). Default cut-off 18:00. Reminder time 16:00 IST = 10:30Z.
+  const AT_1559 = new Date("2026-11-13T10:29:00Z"), AT_1601 = new Date("2026-11-13T10:31:00Z"), AT_1759 = new Date("2026-11-13T12:29:00Z"), AT_1801 = AFTER_CUTOFF;
+  async function company(o: { enabled?: boolean; time?: string; flow?: boolean } = {}) {
+    const { admin, organizationId } = await makeOrg("Rem");
+    const a = (await addMember(admin, "EMPLOYEE", { name: "Asha" })).ctx;
+    const b = (await addMember(admin, "EMPLOYEE", { name: "Ben" })).ctx;
+    await backdate(organizationId);
+    await updateSettings({ ...admin, userId: admin.userId }, { reminderEnabled: o.enabled ?? true, reminderTime: o.time ?? "16:00" });
+    if (o.flow !== false) await makeFlow(organizationId, "UPDATE_REMINDER");
+    return { admin, organizationId, a, b };
+  }
+  const who = async (organizationId: string) => (await events(organizationId)).filter((e) => e.type === "UPDATE_REMINDER").map((e) => (e.payload as any).employee.name).sort();
+
+  it("sends nothing before the reminder time, reminds exactly the people without a submitted update after it, and stops at the cut-off", async () => {
+    const c = await company();
+    await createUpdate(c.a, { sections: { workedOn: ["done"] }, submit: true }, { now: NOW });
+    await createUpdate(c.b, { sections: { workedOn: ["only a draft"] } }, { now: NOW });
+    expect((await runReminderCheck({ now: AT_1559 })).created).toBe(0);
+    expect(await who(c.organizationId)).toEqual([]);
+    const r = await runReminderCheck({ now: AT_1601 });
+    expect(await who(c.organizationId)).toEqual([c.admin.userName, "Ben"].sort());       // Asha submitted; Ben only has a draft; the admin has nothing
+    expect(r.created).toBe(2);
+    // after the cut-off the reminder job does nothing more (the "missing" event is the next stage)
+    const c2 = await company();
+    expect((await runReminderCheck({ now: AT_1801 })).created).toBe(0);
+    expect(await who(c2.organizationId)).toEqual([]);
+  });
+
+  it("a late cron run still reminds (until the cut-off), and a duplicate or overlapping run never reminds twice", async () => {
+    const c = await company();
+    await runReminderCheck({ now: AT_1759 });                                              // the scheduler was late
+    const ids = (await events(c.organizationId)).map((e) => e.eventId).sort();
+    expect(ids).toHaveLength(3);
+    const again = await Promise.all([runReminderCheck({ now: AT_1601 }), runReminderCheck({ now: AT_1759 }), runReminderCheck({ now: AT_1759 })]);
+    expect(again.reduce((n, r) => n + r.created, 0)).toBe(0);
+    expect((await events(c.organizationId)).map((e) => e.eventId).sort()).toEqual(ids);    // same stable IDs
+    expect(await prisma.integrationDelivery.count({ where: { organizationId: c.organizationId } })).toBe(3);
+  });
+
+  it("someone who submits after the reminder went out is not reminded again, and one who submits before the next run is skipped", async () => {
+    const c = await company();
+    await createUpdate(c.a, { sections: { workedOn: ["just in"] }, submit: true }, { now: AT_1601 });
+    await runReminderCheck({ now: new Date(AT_1601.getTime() + 60_000) });
+    expect(await who(c.organizationId)).not.toContain("Asha");
+  });
+
+  it("respects working days, switched-off reminders, people who joined later, deactivated people and missing automations", async () => {
+    const sat = new Date("2026-11-14T10:31:00Z");                                          // Saturday, 16:01 IST
+    const c = await company();
+    await runReminderCheck({ now: sat });                                                   // not a working day
+    expect(await who(c.organizationId)).toEqual([]);
+    const off = await company({ enabled: false });
+    await runReminderCheck({ now: AT_1601 });
+    expect(await who(off.organizationId)).toEqual([]);
+    const noFlow = await company({ flow: false });
+    await runReminderCheck({ now: AT_1601 });
+    expect(await who(noFlow.organizationId)).toEqual([]);                                  // nothing listens: nothing is created
+    const j = await company();
+    const late = (await addMember(j.admin, "EMPLOYEE", { name: "Newbie" })).ctx;
+    const gone = (await addMember(j.admin, "EMPLOYEE", { name: "Gone" })).ctx;
+    await prisma.membership.update({ where: { id: late.membershipId }, data: { createdAt: new Date("2026-11-13T10:45:00Z") } });   // joined 16:15 IST: after the 16:00 reminder time
+    await prisma.membership.update({ where: { id: gone.membershipId }, data: { status: "DEACTIVATED" } });
+    await runReminderCheck({ now: new Date("2026-11-13T11:00:00Z") });
+    const names = await who(j.organizationId);
+    expect(names).not.toContain("Newbie");
+    expect(names).not.toContain("Gone");
+    expect(names).toContain("Asha");
+    expect(c.organizationId).toBeTruthy();
+  });
+
+  it("each organization uses its own timezone: at the same instant one is due and another is not", async () => {
+    const kolkata = await company();                                                      // 16:00 IST → due at 10:30Z
+    const { admin, organizationId } = await makeOrg("Ldn");
+    await prisma.organization.update({ where: { id: organizationId }, data: { timezone: "Europe/London" } });
+    await backdate(organizationId);
+    await updateSettings({ ...admin, userId: admin.userId }, { reminderEnabled: true, reminderTime: "16:00" });
+    await makeFlow(organizationId, "UPDATE_REMINDER");
+    await runReminderCheck({ now: AT_1601 });                                              // 10:31Z = 10:31 in London: not yet
+    expect(await who(organizationId)).toEqual([]);
+    expect((await who(kolkata.organizationId)).length).toBeGreaterThan(0);
+    await runReminderCheck({ now: new Date("2026-11-13T16:05:00Z") });                     // 16:05 London (GMT in November)
+    expect((await who(organizationId)).length).toBe(1);
+  });
+
+  it("handles daylight-saving changes: the reminder time stays 16:00 local on both sides of the clock change", async () => {
+    const { admin, organizationId } = await makeOrg("Dst");
+    await prisma.organization.update({ where: { id: organizationId }, data: { timezone: "Europe/London" } });
+    await backdate(organizationId);
+    await updateSettings({ ...admin, userId: admin.userId }, { reminderEnabled: true, reminderTime: "16:00" });
+    await makeFlow(organizationId, "UPDATE_REMINDER");
+    // BST ends Sun 25 Oct 2026. Fri 23 Oct is BST (UTC+1): 16:00 local = 15:00Z. Mon 26 Oct is GMT: 16:00 local = 16:00Z.
+    await runReminderCheck({ now: new Date("2026-10-23T14:59:00Z") }); expect(await who(organizationId)).toEqual([]);
+    await runReminderCheck({ now: new Date("2026-10-23T15:01:00Z") }); expect((await who(organizationId)).length).toBe(1);
+    await runReminderCheck({ now: new Date("2026-10-26T15:01:00Z") }); expect((await events(organizationId)).length).toBe(1);   // 15:01Z is only 15:01 GMT: not yet
+    await runReminderCheck({ now: new Date("2026-10-26T16:01:00Z") }); expect((await events(organizationId)).length).toBe(2);
+  });
+
+  it("the payload is exactly the documented one, carries a stable event ID and reaches the automation", async () => {
+    const c = await company();
+    await runReminderCheck({ now: AT_1601 });
+    const ev = (await events(c.organizationId)).find((e) => (e.payload as any).employee.name === "Asha")!;
+    expect(ev.payload).toMatchObject({ eventType: "update.reminder", test: false, employee: { name: "Asha", email: expect.stringContaining("@") }, reminder: { date: "2026-11-13", cutoffTime: "18:00", timezone: "Asia/Kolkata", submitUrl: expect.stringContaining("/my-updates/new?date=2026-11-13") } });
+    expect(ev.eventId).toBe(eventIdFor(c.organizationId, eventKeys.reminder(c.a.membershipId, "2026-11-13")));
+    const f = fakeFetch([200]);
+    const d = (await prisma.integrationDelivery.findMany({ where: { integrationEventId: ev.id } }))[0];
+    expect(await processDelivery(d.id, { fetch: f.fetch, now: () => AT_1601 })).toMatchObject({ status: "DELIVERED" });
+    expect(f.calls[0].body.eventType).toBe("update.reminder");
+  });
+
+  it("the cron pass runs reminders too, and the settings refuse a reminder at or after the cut-off", async () => {
+    const c = await company();
+    const r = await runIntegrationCron(AT_1601);
+    expect(r).toHaveProperty("reminders");
+    expect((r as { reminders: { created: number } }).reminders.created).toBe(3);
+    await expect(updateSettings({ ...c.admin, userId: c.admin.userId }, { reminderTime: "18:00" })).rejects.toMatchObject({ status: 400 });
+    await expect(updateSettings({ ...c.admin, userId: c.admin.userId }, { reminderTime: "19:30" })).rejects.toMatchObject({ status: 400 });
+    await expect(updateSettings({ ...c.admin, userId: c.admin.userId }, { updateCutoffTime: "15:00" })).rejects.toMatchObject({ status: 400 });  // cut-off moved before the reminder
+    await updateSettings({ ...c.admin, userId: c.admin.userId }, { reminderEnabled: false, updateCutoffTime: "15:00" });                          // fine once reminders are off
+    await expect(updateSettings({ ...c.admin, userId: c.admin.userId }, { reminderTime: "nope" })).rejects.toBeTruthy();
   });
 });

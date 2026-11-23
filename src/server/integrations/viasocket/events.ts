@@ -19,6 +19,11 @@ export const EVENT_CATALOG: Record<IntegrationEventType, { name: string; label: 
     label: "Employee Reports a Blocker",
     description: "Sent once per update, the first time it contains a real blocker (\"None\" or \"N/A\" doesn't count).",
   },
+  UPDATE_REMINDER: {
+    name: "update.reminder",
+    label: "Daily Update Reminder",
+    description: "Sent at most once per person per day, at the organization's reminder time on a working day, to people who haven't submitted yet (before the cut-off).",
+  },
   UPDATE_MISSING: {
     name: "update.missing",
     label: "Daily Update Missing",
@@ -57,7 +62,9 @@ export type MissingPayload = Envelope & {
   employee: Person & { email: string };
   reminder: { date: string; submitUrl: string; cutoffTime: string; timezone: string };
 };
-export type EventPayload = SubmittedPayload | BlockerPayload | MissingPayload;
+/** Same shape as the missing-update event: who to nudge, the day, a link to the form, and the organization's cut-off. */
+export type ReminderPayload = MissingPayload;
+export type EventPayload = SubmittedPayload | BlockerPayload | MissingPayload | ReminderPayload;
 
 const MAX_BLOCKER_TEXT = 280;
 const NO_BLOCKER = /^(none|no|nil|n\/a|na|nothing|not any|no blockers?|no issues?|no challenges?|-+|\.+)[.!\s]*$/i;
@@ -70,6 +77,7 @@ export const eventKeys = {
   submitted: (updateId: string) => `update.submitted:${updateId}`,
   blocker: (updateId: string) => `update.blocker_reported:${updateId}`,
   missing: (membershipId: string, day: string) => `update.missing:${membershipId}:${day}`,
+  reminder: (membershipId: string, day: string) => `update.reminder:${membershipId}:${day}`,
 };
 
 function envelope(type: IntegrationEventType, eventId: string, orgName: string, test: boolean, now: Date): Envelope {

@@ -16,7 +16,7 @@ type Dept = { id: string; name: string; teamCount: number; memberCount: number }
 type Team = { id: string; name: string; departmentId: string | null; departmentName: string | null; managerId: string | null; managerName: string | null; memberCount: number };
 type Mgr = { id: string; name: string; role: string };
 type Scope = "OWN" | "TEAM" | "DEPARTMENT" | "COMPANY";
-type Settings = { updateCutoffTime: string; editWindowHours: number; workingDays: number[]; aiEnabled: boolean; visibilityScope: Scope; peersSeeBlockers: boolean };
+type Settings = { updateCutoffTime: string; editWindowHours: number; workingDays: number[]; aiEnabled: boolean; visibilityScope: Scope; peersSeeBlockers: boolean; reminderEnabled: boolean; reminderTime: string };
 type Tab = "organization" | "structure" | "schedule" | "visibility";
 
 const TABS: { id: Tab; label: string }[] = [
@@ -86,7 +86,7 @@ function ScheduleForm({ settings }: { settings: Settings }) {
     <Card className="max-w-2xl">
       <CardHeader title="Update schedule" description="When daily updates are expected and how long they stay editable." />
       <CardBody>
-        <form className="space-y-5" onSubmit={(e) => { e.preventDefault(); s.run(() => api("/api/organization/settings", { method: "PATCH", body: { updateCutoffTime: v.updateCutoffTime, editWindowHours: v.editWindowHours, workingDays: v.workingDays, aiEnabled: v.aiEnabled } }), "Settings saved."); }}>
+        <form className="space-y-5" onSubmit={(e) => { e.preventDefault(); s.run(() => api("/api/organization/settings", { method: "PATCH", body: { updateCutoffTime: v.updateCutoffTime, editWindowHours: v.editWindowHours, workingDays: v.workingDays, aiEnabled: v.aiEnabled, reminderEnabled: v.reminderEnabled, reminderTime: v.reminderTime } }), "Settings saved."); }}>
           {s.error && <ErrorNotice>{s.error}</ErrorNotice>}
           <fieldset>
             <legend className="mb-2 text-sm font-medium">Working days</legend>
@@ -106,6 +106,16 @@ function ScheduleForm({ settings }: { settings: Settings }) {
             <Field label="Daily cut-off time" htmlFor="s-cutoff" error={s.fields.updateCutoffTime} hint="Updates after this local time count as late."><Input id="s-cutoff" type="time" value={v.updateCutoffTime} required onChange={(e) => setV({ ...v, updateCutoffTime: e.target.value })} /></Field>
             <Field label="Edit window (hours)" htmlFor="s-edit" error={s.fields.editWindowHours} hint="How long after submitting an employee can edit. 0 = no edits."><Input id="s-edit" type="number" min={0} max={168} value={v.editWindowHours} onChange={(e) => setV({ ...v, editWindowHours: Number(e.target.value) })} /></Field>
           </div>
+          <fieldset className="space-y-3 rounded-lg border border-border p-3">
+            <legend className="px-1 text-sm font-medium">Daily reminder</legend>
+            <label className="flex cursor-pointer items-start gap-3">
+              <input type="checkbox" className="mt-1" checked={v.reminderEnabled} onChange={(e) => setV({ ...v, reminderEnabled: e.target.checked })} />
+              <span><span className="text-sm font-medium">Remind people who haven&apos;t submitted</span><span className="block text-xs text-muted">On working days, at the time below (your organization&apos;s timezone), each person without an update gets a reminder. It&apos;s sent through your viaSocket automations: link one to <strong>Daily Update Reminder</strong> on the Automations page (Slack, email, anything viaSocket supports).</span></span>
+            </label>
+            {v.reminderEnabled && (
+              <Field label="Reminder time" htmlFor="s-remind" error={s.fields.reminderTime} hint="Must be earlier than the cut-off. After the cut-off, the “Daily Update Missing” event takes over."><Input id="s-remind" type="time" value={v.reminderTime} required className="max-w-40" onChange={(e) => setV({ ...v, reminderTime: e.target.value })} /></Field>
+            )}
+          </fieldset>
           <label className="flex cursor-pointer items-start gap-3 rounded-lg border border-border p-3">
             <input type="checkbox" className="mt-1" checked={v.aiEnabled} onChange={(e) => setV({ ...v, aiEnabled: e.target.checked })} />
             <span><span className="text-sm font-medium">Enable AI summaries</span><span className="block text-xs text-muted">When on, submitted updates can be summarized by AI. Requires an AI provider configured on the server.</span></span>

@@ -1,6 +1,6 @@
 # Daymark automation events
 
-Daymark sends three events to the automations an organization's admin built in **Automations**
+Daymark sends four events to the automations an organization's admin built in **Automations**
 (powered by viaSocket). This page is the contract: when each event fires, exactly which fields it
 carries, and where every value comes from. The same field list is shown inside the app.
 
@@ -34,7 +34,7 @@ with the values (which channel, what wording) is chosen once, by the admin, in t
 |---|---|---|
 | `schemaVersion` | Daymark | `1` |
 | `eventId` | Daymark | Stable; dedupe on this |
-| `eventType` | Daymark | `update.submitted` · `update.blocker_reported` · `update.missing` |
+| `eventType` | Daymark | `update.submitted` · `update.blocker_reported` · `update.reminder` · `update.missing` |
 | `occurredAt` | Daymark | ISO-8601 UTC |
 | `test` | Daymark | `true` for "Send test event" (synthetic data, never real people) |
 | `organization.name` | Daymark | |
@@ -69,6 +69,25 @@ adds one. "None", "N/A", "no blockers" etc. don't count. Event key: `update.bloc
 | `manager.name`, `manager.email` | Daymark | recipient |
 | `blocker.count` | Daymark | how many real blockers |
 | `blocker.text` *(optional)* | Daymark | **Only if an admin turned on "Include blocker text"** (off by default): the first blocker, truncated to 280 characters |
+
+## `update.reminder` — Daily Update Reminder
+
+Fires **at most once per person per day**, from the cron job, at the organization's **reminder time** (one time of
+day for the whole organization, set by an admin in *Settings → Update schedule*, in the organization's timezone).
+Conditions: reminders are switched on; it is a working day; the reminder time has passed but the cut-off has not;
+the person is active and joined before the reminder time; they have no *submitted* update for the day (a draft
+doesn't count); and the organization has an active automation linked to this event. If a cron run is late the
+reminder still goes out until the cut-off (after that, the *missing* event takes over). Event key:
+`update.reminder:<membershipId>:<YYYY-MM-DD>`.
+
+| Field | Source | Why |
+|---|---|---|
+| `employee.name`, `employee.email`, `employee.team` | Daymark | recipient of the reminder |
+| `reminder.date` | Daymark | the day to submit for |
+| `reminder.submitUrl` | Daymark | one click to the update form |
+| `reminder.cutoffTime`, `reminder.timezone` | Daymark | wording ("please submit by 18:00 IST") |
+
+No manager data and no work content.
 
 ## `update.missing` — Daily Update Missing
 

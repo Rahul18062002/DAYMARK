@@ -1,6 +1,6 @@
 // Pure data (safe for the browser): what each event sends and where every value comes from.
 // A test keeps this in lock-step with the real payloads.
-export type EventKey = "UPDATE_SUBMITTED" | "UPDATE_BLOCKER_REPORTED" | "UPDATE_MISSING";
+export type EventKey = "UPDATE_SUBMITTED" | "UPDATE_BLOCKER_REPORTED" | "UPDATE_MISSING" | "UPDATE_REMINDER";
 export type FieldDoc = { path: string; source: string; note?: string; optional?: boolean };
 
 const COMMON: FieldDoc[] = [
@@ -34,6 +34,16 @@ export const EVENT_FIELDS: Record<EventKey, FieldDoc[]> = {
     { path: "manager.email", source: "Daymark" },
     { path: "blocker.count", source: "Daymark", note: "Number of real blockers (“None” / “N/A” don't count)." },
     { path: "blocker.text", source: "Daymark", optional: true, note: "Only when an admin enabled “Include blocker text”: the first blocker, up to 280 characters." },
+  ],
+  UPDATE_REMINDER: [
+    ...COMMON,
+    { path: "employee.name", source: "Daymark" },
+    { path: "employee.email", source: "Daymark", note: "So a reminder can reach the person." },
+    { path: "employee.team", source: "Daymark" },
+    { path: "reminder.date", source: "Daymark" },
+    { path: "reminder.submitUrl", source: "Daymark", note: "Opens the update form for that day." },
+    { path: "reminder.cutoffTime", source: "Daymark", note: "The organization's cut-off (HH:MM): the reminder is for submitting before this time." },
+    { path: "reminder.timezone", source: "Daymark" },
   ],
   UPDATE_MISSING: [
     ...COMMON,
