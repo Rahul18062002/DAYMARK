@@ -172,6 +172,7 @@ model Organization {
   keyResults   KeyResult[]
   keyResultCheckIns KeyResultCheckIn[]
   workTasks    WorkTask[]
+  aiSummaries  AiSummary[]
   automationFlows      AutomationFlow[]
   integrationEvents    IntegrationEvent[]
   integrationDeliveries IntegrationDelivery[]
@@ -197,6 +198,8 @@ model OrgSettings {
   // on working days, before the cut-off. Off until an admin turns it on.
   reminderEnabled  Boolean     @default(false)
   reminderTime     String      @default("16:00")
+  // AI processing sends people's update text to the configured AI provider, so it needs an explicit, recorded opt-in.
+  aiConsentAt      DateTime?
   // Automations (viaSocket): admins always have access; managers only when this is on.
   automationsManagerAccess     Boolean @default(false)
   // Off by default: blocker free-text is only sent to automations if the company opts in.
@@ -214,6 +217,7 @@ model Department {
   teams   Team[]
   members Membership[]
   objectives Objective[]
+  summaries  AiSummary[]
 
   @@unique([id, organizationId])
   @@unique([organizationId, name])
@@ -233,6 +237,7 @@ model Team {
   members      Membership[]        @relation("MemberTeam")
   accessGrants ManagerTeamAccess[]
   objectives   Objective[]
+  summaries    AiSummary[]
 
   @@unique([id, organizationId])
   @@unique([organizationId, name])
@@ -270,6 +275,8 @@ model Membership {
   ownedKeyResults   KeyResult[]     @relation("KeyResultOwner")
   checkIns          KeyResultCheckIn[]
   assignedTasks     WorkTask[]      @relation("TaskAssignee")
+  summariesAbout    AiSummary[]     @relation("SummarySubject")
+  summariesReviewed AiSummary[]     @relation("SummaryReviewer")
   createdTasks      WorkTask[]      @relation("TaskCreator")
   managedTeams  Team[]              @relation("TeamManager")
   teamAccess    ManagerTeamAccess[]
@@ -370,6 +377,7 @@ model DailyUpdate {
   items       UpdateItem[]
   attachments UpdateAttachment[]
   goalLinks   UpdateGoalLink[]
+  summaries   AiSummary[]
   revisions   UpdateRevision[]
 
   @@unique([membershipId, updateDate])
@@ -431,6 +439,7 @@ enum IntegrationEventType {
   UPDATE_BLOCKER_REPORTED
   UPDATE_MISSING
   UPDATE_REMINDER
+  REPORT_PUBLISHED
 }
 
 enum DeliveryStatus {
@@ -709,4 +718,66 @@ model UpdateGoalLink {
 
   @@unique([dailyUpdateId, objectiveId])
   @@index([organizationId, objectiveId])
+}
+
+// ───────────────────────── AI summaries and weekly reports ─────────────────────────
+// Everything here is a DRAFT until a person reviews it. Reports are generated from what people reported themselves
+// and from goal progress; they are labelled as AI-generated and unverified wherever they are shown.
+
+enum SummaryKind {
+  DAILY_UPDATE
+  PERSON_WEEK
+  TEAM_WEEK
+  DEPARTMENT_WEEK
+  COMPANY_WEEK
+}
+
+enum SummaryStatus {
+  GENERATED
+  PUBLISHED
+  REJECTED
+}
+
+model AiSummary {
+  id             String        @id @default(cuid())
+  organizationId String
+  organization   Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  kind           SummaryKind
+  /// One report per subject per period: "update:<id>" | "person:<membershipId>" | "team:<id>" | "dept:<id>" | "company"
+  scopeKey       String
+  title          String
+  subjectId      String?
+  subject        Membership?   @relation("SummarySubject", fields: [subjectId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  teamId         String?
+  team           Team?         @relation(fields: [teamId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  departmentId   String?
+  department     Department?   @relation(fields: [departmentId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  updateId       String?
+  update         DailyUpdate?  @relation(fields: [updateId, organizationId], references: [id, organizationId], onDelete: Cascade)
+  /// "YYYY-MM-DD" in the organization's calendar (a day for DAILY_UPDATE, Monday–Sunday for weeks).
+  periodStart    String
+  periodEnd      String
+  /// {headline, summary, highlights[], risks[], blockers[], goals[]}: validated on the way in, rendered as plain text.
+  content        Json
+  provider       String
+  model          String
+  /// Hash of the exact input: unchanged input never costs another AI call.
+  inputHash      String
+  sourceCount    Int           @default(0)
+  inputTokens    Int?
+  outputTokens   Int?
+  status         SummaryStatus @default(GENERATED)
+  reviewedById   String?
+  reviewedBy     Membership?   @relation("SummaryReviewer", fields: [reviewedById, organizationId], references: [id, organizationId], onDelete: Restrict)
+  reviewedAt     DateTime?
+  reviewNote     String?
+  editedAt       DateTime?
+  generatedAt    DateTime
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  @@unique([id, organizationId])
+  @@unique([organizationId, kind, scopeKey, periodStart])
+  @@index([organizationId, kind, periodStart])
+  @@index([organizationId, status])
 }

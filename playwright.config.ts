@@ -40,7 +40,7 @@ export default defineConfig({
       url: "http://localhost:3100/login",
       reuseExistingServer: false,
       timeout: 120_000,
-      env: { ...base, BETTER_AUTH_URL: "http://localhost:3100", NEXT_PUBLIC_APP_URL: "http://localhost:3100", SMTP_HOST: "127.0.0.1", SMTP_PORT: "2525", SMTP_FROM: "Daymark <no-reply@daymark.test>", ...viaSocketDummy },
+      env: { ...base, BETTER_AUTH_URL: "http://localhost:3100", NEXT_PUBLIC_APP_URL: "http://localhost:3100", SMTP_HOST: "127.0.0.1", SMTP_PORT: "2525", SMTP_FROM: "Daymark <no-reply@daymark.test>", ANTHROPIC_API_KEY: "e2e-key", ANTHROPIC_BASE_URL: "http://127.0.0.1:2526", AI_PROVIDER: "anthropic", ...viaSocketDummy },
     },
     {
       command: "npx next start -p 3101",

@@ -82,7 +82,7 @@ test.describe.serial("Daymark × viaSocket — Automations (UI, permissions, iso
 
     // Documentation of what each event sends.
     await page.getByText("Daily Update Missing").last().click();
-    await expect(page.getByText("reminder.submitUrl")).toBeVisible();
+    await expect(page.getByText("reminder.submitUrl").last()).toBeVisible();
     await page.getByText("Employee Reports a Blocker").last().click();
     await expect(page.getByText("blocker.text")).toBeVisible();
     await expect(page.getByText(/Only when an admin enabled/)).toBeVisible();

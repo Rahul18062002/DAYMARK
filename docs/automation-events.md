@@ -1,6 +1,6 @@
 # Daymark automation events
 
-Daymark sends four events to the automations an organization's admin built in **Automations**
+Daymark sends five events to the automations an organization's admin built in **Automations**
 (powered by viaSocket). This page is the contract: when each event fires, exactly which fields it
 carries, and where every value comes from. The same field list is shown inside the app.
 
@@ -34,7 +34,7 @@ with the values (which channel, what wording) is chosen once, by the admin, in t
 |---|---|---|
 | `schemaVersion` | Daymark | `1` |
 | `eventId` | Daymark | Stable; dedupe on this |
-| `eventType` | Daymark | `update.submitted` · `update.blocker_reported` · `update.reminder` · `update.missing` |
+| `eventType` | Daymark | `update.submitted` · `update.blocker_reported` · `update.reminder` · `update.missing` · `report.published` |
 | `occurredAt` | Daymark | ISO-8601 UTC |
 | `test` | Daymark | `true` for "Send test event" (synthetic data, never real people) |
 | `organization.name` | Daymark | |
@@ -104,6 +104,20 @@ this event. Event key: `update.missing:<membershipId>:<YYYY-MM-DD>`.
 | `reminder.cutoffTime`, `reminder.timezone` | Daymark | wording ("by 18:00 IST") |
 
 No manager data and no work content.
+
+## `report.published` — Weekly Report Published
+
+Fires **once per report**, when a reviewer approves a weekly report (person, team, department or company) for
+publication. Event key: `report.published:<reportId>`. **Link and title only**: the AI-written text never leaves
+Daymark through this event.
+
+| Field | Source | Why |
+|---|---|---|
+| `report.kind` | Daymark | `person`, `team`, `department` or `company` |
+| `report.title` | Daymark | e.g. "Platform team: week of 16 Nov" |
+| `report.periodStart`, `report.periodEnd` | Daymark | Monday and Sunday of the week |
+| `report.url` | Daymark | link into Daymark (sign-in and permission still required) |
+| `approvedBy.name` | Daymark | the reviewer who approved it |
 
 ## Example (blocker, link-only default)
 

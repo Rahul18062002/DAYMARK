@@ -24,6 +24,11 @@ export const EVENT_CATALOG: Record<IntegrationEventType, { name: string; label: 
     label: "Daily Update Reminder",
     description: "Sent at most once per person per day, at the organization's reminder time on a working day, to people who haven't submitted yet (before the cut-off).",
   },
+  REPORT_PUBLISHED: {
+    name: "report.published",
+    label: "Weekly Report Published",
+    description: "Sent once when a reviewer approves a person, team, department or company weekly report. Link and title only: the report text stays in Daymark.",
+  },
   UPDATE_MISSING: {
     name: "update.missing",
     label: "Daily Update Missing",
@@ -64,7 +69,11 @@ export type MissingPayload = Envelope & {
 };
 /** Same shape as the missing-update event: who to nudge, the day, a link to the form, and the organization's cut-off. */
 export type ReminderPayload = MissingPayload;
-export type EventPayload = SubmittedPayload | BlockerPayload | MissingPayload | ReminderPayload;
+export type ReportPayload = Envelope & {
+  report: { kind: "person" | "team" | "department" | "company"; title: string; periodStart: string; periodEnd: string; url: string };
+  approvedBy: { name: string };
+};
+export type EventPayload = SubmittedPayload | BlockerPayload | MissingPayload | ReminderPayload | ReportPayload;
 
 const MAX_BLOCKER_TEXT = 280;
 const NO_BLOCKER = /^(none|no|nil|n\/a|na|nothing|not any|no blockers?|no issues?|no challenges?|-+|\.+)[.!\s]*$/i;
@@ -78,6 +87,7 @@ export const eventKeys = {
   blocker: (updateId: string) => `update.blocker_reported:${updateId}`,
   missing: (membershipId: string, day: string) => `update.missing:${membershipId}:${day}`,
   reminder: (membershipId: string, day: string) => `update.reminder:${membershipId}:${day}`,
+  report: (summaryId: string) => `report.published:${summaryId}`,
 };
 
 function envelope(type: IntegrationEventType, eventId: string, orgName: string, test: boolean, now: Date): Envelope {
@@ -92,6 +102,7 @@ export function samplePayload(type: IntegrationEventType, eventId: string, orgNa
   const manager = { name: "Test Manager", email: "test.manager@example.invalid" };
   if (type === "UPDATE_SUBMITTED") return { ...base, employee: person, update: { date: day, isLate: false, hasBlockers: false, url: `${appUrl()}/team-updates/sample` }, manager };
   if (type === "UPDATE_BLOCKER_REPORTED") return { ...base, employee: person, update: { date: day, url: `${appUrl()}/team-updates/sample` }, manager, blocker: { count: 1 } };
+  if (type === "REPORT_PUBLISHED") return { ...base, report: { kind: "team", title: "Sample Team: week of 9 Nov", periodStart: day, periodEnd: day, url: `${appUrl()}/reports/sample` }, approvedBy: { name: "Test Manager" } };
   return { ...base, employee: { ...person, email: "test.employee@example.invalid" }, reminder: { date: day, submitUrl: `${appUrl()}/my-updates/new`, cutoffTime: "18:00", timezone: "UTC" } };
 }
 

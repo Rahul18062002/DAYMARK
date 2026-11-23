@@ -3,14 +3,14 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
 import { useTheme } from "next-themes";
-import { ClipboardList, DatabaseBackup, GitFork, LayoutDashboard, Menu, Moon, Network, PenLine, Scale, Settings, Sun, Target, Users, Workflow, X } from "lucide-react";
+import { ClipboardList, DatabaseBackup, FileText, GitFork, LayoutDashboard, Menu, Moon, Network, PenLine, Scale, Settings, Sun, Target, Users, Workflow, X } from "lucide-react";
 import { Logo } from "@/components/brand/logo";
 import { Avatar } from "@/components/ui/avatar";
 import { SignOutButton } from "./sign-out-button";
 import { cn } from "@/lib/utils";
 import type { NavItem } from "@/lib/nav";
 
-const ICONS = { dashboard: LayoutDashboard, users: Users, settings: Settings, updates: PenLine, team: ClipboardList, automations: Workflow, goals: Target, orgchart: Network, compare: Scale, backup: DatabaseBackup } as const;
+const ICONS = { dashboard: LayoutDashboard, users: Users, settings: Settings, updates: PenLine, team: ClipboardList, automations: Workflow, goals: Target, orgchart: Network, compare: Scale, backup: DatabaseBackup, reports: FileText } as const;
 void GitFork;
 
 function ThemeToggle() {

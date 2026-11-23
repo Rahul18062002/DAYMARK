@@ -482,3 +482,21 @@ export async function recentWorkOnGoal(actor: Actor, objectiveId: string, limit 
   });
   return links.map((l) => ({ updateId: l.dailyUpdate.id, date: l.dailyUpdate.updateDate, employeeName: l.dailyUpdate.membership.user.name, isOwn: l.dailyUpdate.membershipId === actor.membershipId, preview: l.dailyUpdate.items[0]?.text ?? "" }));
 }
+
+/** Read access context (also used by reports): who the actor may read, manage, and which team/department they belong to. */
+export const viewerContext = viewer;
+
+/** Goal progress for AI input and reports. System-level: not filtered by viewer, never shown as-is to people (the report is reviewed first). */
+export async function goalSnapshot(organizationId: string, o: { ownerIds?: string[]; teamId?: string; departmentId?: string; company?: boolean; day: string; limit?: number }) {
+  const rows = await prisma.objective.findMany({
+    where: { organizationId, periodStart: { lte: o.day }, periodEnd: { gte: o.day } },
+    select: objSelect,
+  });
+  const results = rollUp(rows.map(toNode), o.day);
+  const owners = new Set(o.ownerIds ?? []);
+  const pick = rows.filter((r) => r.status === "ACTIVE" && (owners.has(r.ownerId) || (!!o.teamId && r.teamId === o.teamId) || (!!o.departmentId && r.departmentId === o.departmentId) || (o.company && (r.level === "COMPANY" || r.level === "DEPARTMENT"))));
+  return pick
+    .sort((a, b) => levelRank(a.level as Level) - levelRank(b.level as Level) || a.title.localeCompare(b.title))
+    .slice(0, o.limit ?? 12)
+    .map((r) => ({ title: r.title, level: r.level as Level, ownerName: r.owner.user.name, progress: results.get(r.id)!.progress, health: results.get(r.id)!.health }));
+}

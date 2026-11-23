@@ -1,6 +1,6 @@
 // Pure data (safe for the browser): what each event sends and where every value comes from.
 // A test keeps this in lock-step with the real payloads.
-export type EventKey = "UPDATE_SUBMITTED" | "UPDATE_BLOCKER_REPORTED" | "UPDATE_MISSING" | "UPDATE_REMINDER";
+export type EventKey = "UPDATE_SUBMITTED" | "UPDATE_BLOCKER_REPORTED" | "UPDATE_MISSING" | "UPDATE_REMINDER" | "REPORT_PUBLISHED";
 export type FieldDoc = { path: string; source: string; note?: string; optional?: boolean };
 
 const COMMON: FieldDoc[] = [
@@ -44,6 +44,15 @@ export const EVENT_FIELDS: Record<EventKey, FieldDoc[]> = {
     { path: "reminder.submitUrl", source: "Daymark", note: "Opens the update form for that day." },
     { path: "reminder.cutoffTime", source: "Daymark", note: "The organization's cut-off (HH:MM): the reminder is for submitting before this time." },
     { path: "reminder.timezone", source: "Daymark" },
+  ],
+  REPORT_PUBLISHED: [
+    ...COMMON,
+    { path: "report.kind", source: "Daymark", note: "person, team, department or company." },
+    { path: "report.title", source: "Daymark", note: "For example “Platform team: week of 16 Nov”." },
+    { path: "report.periodStart", source: "Daymark", note: "Monday of the week (YYYY-MM-DD)." },
+    { path: "report.periodEnd", source: "Daymark", note: "Sunday of the week." },
+    { path: "report.url", source: "Daymark", note: "Link to the report in Daymark. Opening it still requires sign-in and permission." },
+    { path: "approvedBy.name", source: "Daymark", note: "The reviewer who approved it." },
   ],
   UPDATE_MISSING: [
     ...COMMON,

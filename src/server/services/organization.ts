@@ -105,7 +105,10 @@ export async function updateSettings(actor: Actor & { userId: string }, input: u
     // Only matters while reminders are on: with them off, any cut-off is fine.
     if ((data.reminderEnabled ?? cur?.reminderEnabled ?? false) && reminder >= cutoff) throw badRequest("The reminder time must be earlier than the daily cut-off.", { reminderTime: "Must be earlier than the cut-off time" });
   }
-  const row = { ...rest, ...(workingDays ? { workingDays: formatWorkingDays(workingDays) } : {}) };
+  // Turning AI on records the admin's opt-in once (re-saving other settings doesn't move it); turning it off withdraws it.
+  const had = data.aiEnabled === undefined ? null : (await prisma.orgSettings.findUnique({ where: { organizationId: actor.organizationId }, select: { aiConsentAt: true } }))?.aiConsentAt ?? null;
+  const consent = data.aiEnabled === undefined ? {} : data.aiEnabled ? (had ? {} : { aiConsentAt: new Date() }) : { aiConsentAt: null };
+  const row = { ...rest, ...consent, ...(workingDays ? { workingDays: formatWorkingDays(workingDays) } : {}) };
   return prisma.$transaction(async (tx) => {
     const stored = await tx.orgSettings.upsert({
       where: { organizationId: actor.organizationId },

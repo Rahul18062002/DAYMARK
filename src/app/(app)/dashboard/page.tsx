@@ -18,6 +18,8 @@ import { Highlights } from "@/components/updates/highlights";
 import { WeekStrip } from "@/components/updates/week-strip";
 import { BlockerBadge, UpdateStatusBadge } from "@/components/updates/badges";
 import { GoalsSnapshot } from "@/components/goals/goals-snapshot";
+import { latestOwnWeekly } from "@/server/services/summaries";
+import { ReportBody } from "@/components/reports/report-body";
 import { formatDay } from "@/lib/dates";
 
 export const metadata: Metadata = { title: "Dashboard" };
@@ -140,7 +142,7 @@ async function ManagerDashboard({ first }: { first: string }) {
 
 async function EmployeeDashboard({ first }: { first: string }) {
   const ctx = await requirePageContext();
-  const [today, week, recent, me] = await Promise.all([getTodayStatus(ctx), getWeekOverview(ctx), listOwnUpdates(ctx, 5), getMember(ctx, ctx.membershipId)]);
+  const [today, week, recent, me, summary] = await Promise.all([getTodayStatus(ctx), getWeekOverview(ctx), listOwnUpdates(ctx, 5), getMember(ctx, ctx.membershipId), latestOwnWeekly(ctx)]);
   const t = today.update;
   const cta = !t
     ? { label: "Submit Daily Update", href: "/my-updates/new", text: "You haven't submitted today's update yet.", tone: "primary" as const }
@@ -179,8 +181,8 @@ async function EmployeeDashboard({ first }: { first: string }) {
           )}
         </Card>
         <Card>
-          <CardHeader title="Latest summary" />
-          <EmptyState icon={<Sparkles className="h-5 w-5" />} title="No summary yet" description="When AI summaries are enabled for your organization, the latest one will appear here." />
+          <CardHeader title="Latest summary" description={summary ? summary.title : undefined} action={summary ? <Button asChild variant="ghost" size="sm"><Link href={`/reports/${summary.id}`}>Read</Link></Button> : undefined} />
+          {summary ? <CardBody><ReportBody r={summary} compact /></CardBody> : <EmptyState icon={<Sparkles className="h-5 w-5" />} title="No summary yet" description="When your manager publishes your weekly summary, it will appear here." />}
         </Card>
         <div className="lg:col-span-2"><GoalsSnapshot ctx={ctx} /></div>
         <Card className="lg:col-span-2">

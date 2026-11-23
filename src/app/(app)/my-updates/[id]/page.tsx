@@ -5,6 +5,8 @@ import { ArrowLeft, CheckCircle2, Pencil } from "lucide-react";
 import { requirePageContext } from "@/server/auth/context";
 import { prisma } from "@/server/db";
 import { getOwnUpdate } from "@/server/services/updates";
+import { aiAllowed, getUpdateSummary } from "@/server/services/summaries";
+import { UpdateSummaryCard } from "@/components/reports/update-summary";
 import { AppError } from "@/server/errors";
 import { Button } from "@/components/ui/button";
 import { PageHeader } from "@/components/ui/states";
@@ -20,6 +22,7 @@ export default async function OwnUpdatePage({ params, searchParams }: { params: 
   const update = await getOwnUpdate(ctx, id).catch((e) => { if (e instanceof AppError && e.status === 404) notFound(); throw e; });
   if (update.status === "DRAFT") redirect(`/my-updates/${id}/edit`);
   const org = await prisma.organization.findUniqueOrThrow({ where: { id: ctx.organizationId }, select: { timezone: true } });
+  const [summary, aiOn] = await Promise.all([getUpdateSummary(ctx, id), aiAllowed(ctx.organizationId)]);
 
   return (
     <>
@@ -35,7 +38,7 @@ export default async function OwnUpdatePage({ params, searchParams }: { params: 
           </div>
         </div>
       )}
-      <div className="max-w-3xl"><UpdateView update={update} timezone={org.timezone} /></div>
+      <div className="max-w-3xl space-y-6"><UpdateView update={update} timezone={org.timezone} /><UpdateSummaryCard summary={summary} updateId={id} canGenerate aiOn={aiOn} /></div>
     </>
   );
 }

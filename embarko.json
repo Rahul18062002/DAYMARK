@@ -13,6 +13,12 @@
       "path": "/api/cron/backup",
       "timezone": "UTC",
       "name": "nightly encrypted backup"
+    },
+    {
+      "cron": "*/30 * * * *",
+      "path": "/api/cron/weekly-reports",
+      "timezone": "UTC",
+      "name": "weekly AI reports"
     }
   ]
 }

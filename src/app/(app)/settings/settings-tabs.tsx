@@ -23,7 +23,7 @@ const TABS: { id: Tab; label: string }[] = [
   { id: "organization", label: "Organization" }, { id: "structure", label: "Departments & teams" }, { id: "schedule", label: "Update schedule" }, { id: "visibility", label: "Visibility" },
 ];
 
-export function SettingsTabs(p: { initialTab: Tab; org: { name: string; timezone: string; logoUrl: string }; settings: Settings; departments: Dept[]; teams: Team[]; managers: Mgr[] }) {
+export function SettingsTabs(p: { initialTab: Tab; org: { name: string; timezone: string; logoUrl: string }; settings: Settings; aiConfigured: boolean; departments: Dept[]; teams: Team[]; managers: Mgr[] }) {
   const [tab, setTab] = useState<Tab>(p.initialTab);
   return (
     <div>
@@ -36,7 +36,7 @@ export function SettingsTabs(p: { initialTab: Tab; org: { name: string; timezone
       <div role="tabpanel" id={`panel-${tab}`} aria-labelledby={`tab-${tab}`}>
         {tab === "organization" && <OrganizationForm org={p.org} />}
         {tab === "structure" && <Structure departments={p.departments} teams={p.teams} managers={p.managers} />}
-        {tab === "schedule" && <ScheduleForm settings={p.settings} />}
+        {tab === "schedule" && <ScheduleForm settings={p.settings} aiConfigured={p.aiConfigured} />}
         {tab === "visibility" && <VisibilityForm settings={p.settings} />}
       </div>
     </div>
@@ -79,7 +79,23 @@ function OrganizationForm({ org }: { org: { name: string; timezone: string; logo
 
 const DAYS = [[1, "Mon"], [2, "Tue"], [3, "Wed"], [4, "Thu"], [5, "Fri"], [6, "Sat"], [7, "Sun"]] as const;
 
-function ScheduleForm({ settings }: { settings: Settings }) {
+function AiTest() {
+  const [state, setState] = useState<{ busy: boolean; msg: string | null; ok: boolean }>({ busy: false, msg: null, ok: false });
+  return (
+    <div className="flex flex-wrap items-center gap-3">
+      <Button type="button" variant="secondary" size="sm" loading={state.busy} onClick={async () => {
+        setState({ busy: true, msg: null, ok: false });
+        try {
+          const r = await api<{ ok: boolean; provider?: string; model?: string; ms?: number; reason?: string }>("/api/ai/test", { method: "POST", body: {} });
+          setState({ busy: false, ok: r.ok, msg: r.ok ? `Connected to ${r.provider} (${r.model}) in ${r.ms} ms.` : r.reason === "NOT_CONFIGURED" ? "No AI key is configured on the server yet." : `The provider answered with a problem (${(r.reason ?? "error").toLowerCase().replace("_", " ")}).` });
+        } catch (e) { setState({ busy: false, ok: false, msg: e instanceof ApiError ? e.message : "Couldn't run the test." }); }
+      }}>Test AI connection</Button>
+      {state.msg && <span role="status" className={`text-xs ${state.ok ? "text-success" : "text-danger"}`}>{state.msg}</span>}
+    </div>
+  );
+}
+
+function ScheduleForm({ settings, aiConfigured }: { settings: Settings; aiConfigured: boolean }) {
   const s = useSave();
   const [v, setV] = useState(settings);
   return (
@@ -118,8 +134,14 @@ function ScheduleForm({ settings }: { settings: Settings }) {
           </fieldset>
           <label className="flex cursor-pointer items-start gap-3 rounded-lg border border-border p-3">
             <input type="checkbox" className="mt-1" checked={v.aiEnabled} onChange={(e) => setV({ ...v, aiEnabled: e.target.checked })} />
-            <span><span className="text-sm font-medium">Enable AI summaries</span><span className="block text-xs text-muted">When on, submitted updates can be summarized by AI. Requires an AI provider configured on the server.</span></span>
+            <span><span className="text-sm font-medium">Enable AI summaries and weekly reports</span><span className="block text-xs text-muted">When on, the text of submitted updates and your goal progress are sent to an outside AI provider to write short summaries and weekly reports. Nothing is published until a manager reviews it, and everything is labelled as AI-generated and unverified. By turning this on you agree on behalf of your organization, so tell your team first.</span></span>
           </label>
+          {v.aiEnabled && (
+            <div className="space-y-2 rounded-lg bg-surface-muted p-3">
+              <p className="text-xs text-muted">{aiConfigured ? "An AI provider key is configured on the server." : "No AI provider key is configured on the server yet, so nothing is sent. Add ANTHROPIC_API_KEY (or OPENAI_API_KEY) to the server environment."}</p>
+              {aiConfigured && <AiTest />}
+            </div>
+          )}
           <Button type="submit" loading={s.busy}>Save schedule</Button>
         </form>
       </CardBody>

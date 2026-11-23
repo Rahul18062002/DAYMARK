@@ -15,6 +15,9 @@ const schema = z.object({
   AI_PROVIDER: z.enum(["anthropic", "openai"]).default("anthropic"),
   AI_MODEL: z.string().optional(),
   ANTHROPIC_API_KEY: z.string().optional(),
+  // Optional gateway/proxy base URLs (an AI gateway, or a local stand-in in tests). Default: the providers' own APIs.
+  ANTHROPIC_BASE_URL: z.url().optional(),
+  OPENAI_BASE_URL: z.url().optional(),
   OPENAI_API_KEY: z.string().optional(),
   // Automations (viaSocket) — all optional: Daymark runs fully without them.
   VIASOCKET_ORG_ID: z.string().optional(),

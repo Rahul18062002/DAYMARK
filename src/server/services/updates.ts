@@ -6,6 +6,7 @@ import { assertCan, type Actor } from "../policy";
 import { AppError, badRequest, conflict, forbidden, notFound } from "../errors";
 import { createUpdateSchema, patchUpdateSchema } from "../validation";
 import { setUpdateGoalLinks } from "./goals";
+import { queueDailySummary } from "./summaries";
 import { notifyUpdateChanged } from "../integrations/viasocket/events";
 import { addDays, isoWeekday, localDay, weekStart, zonedTimeToUtc } from "@/lib/dates";
 import { parseWorkingDays } from "@/lib/working-days";
@@ -121,6 +122,7 @@ export async function createUpdate(actor: A, raw: unknown, opts: Opts & { source
   // After commit, best-effort, can never fail or slow this call (see integrations/viasocket/events.ts).
   if (input.submit) {
     notifyUpdateChanged({ organizationId: actor.organizationId, updateId: result.id, submittedNow: true, blockerNow: computeHasBlockers(content.sections.BLOCKER) });
+    queueDailySummary(actor.organizationId, result.id);
   }
   return result;
 }
@@ -205,6 +207,7 @@ export async function updateUpdate(actor: A, id: string, raw: unknown, opts: Opt
   });
   const n = notify as { submittedNow: boolean; blockerNow: boolean } | null;
   if (n) notifyUpdateChanged({ organizationId: actor.organizationId, updateId: id, ...n });
+  if (result.changed && result.status !== "DRAFT") queueDailySummary(actor.organizationId, id);
   return result;
 }
 
