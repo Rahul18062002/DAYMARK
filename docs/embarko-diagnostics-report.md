@@ -28,13 +28,16 @@ Measurements below were taken on the real platform unless marked "local".
 
 | Check | Result |
 | --- | --- |
-| Integration tests (real SQLite file) | **126 passed** (108 earlier + SQLite durability/WAL/FK, concurrency, rollback, safe-migration, password hashing, client-IP) |
-| Browser tests (Playwright, two real servers) | **37 passed** |
-| Concurrency | 40 parallel rate-limit calls → exactly 25 pass / 15 refused; 12 parallel submissions in 3 organizations all land; 8 parallel double-submits → exactly 1; two admins demoting each other at once → exactly 1 succeeds, 1 admin remains; 6 workers racing one delivery → 1 send; 3 concurrent sweeps over 30 deliveries → each once; lease exclusive under 12 concurrent acquirers; crashed lease expires |
-| Deployed smoke test (`tests/live/10-embarko-smoke.mts`, 23 checks) | **23 passed**: onboarding, 7 invitations accepted, employee and manager sign-in, wrong password refused, unauthenticated API refused, 5 parallel submissions, duplicate-day 409, manager sees team, employee refused the team view, **other organization gets 404 / sees nothing**, scheduler route refuses missing/wrong secret |
-| Persistence across redeploys | an account created before a redeploy signed in after it; data and `daymark.db` intact |
-| Scheduler | ran automatically and on demand, HTTP 200 in ~100 ms |
-| viaSocket on the platform | credentials present server-side; token endpoint returns an embed token for an admin; Automations page 200. **Real Slack delivery from Embarko is still untested** (needs your browser authorization) |
+| Integration tests (real SQLite file) | **233 passed** (14 files: tenancy and visibility, goals and roll-up math, insights, a 300-person scale test, backup/restore, AI layer, SQLite durability, safe migration incl. a real second process holding the lock, password hashing, client-IP, automations) |
+| Browser tests (Playwright, two real servers) | **54 passed** (desktop and phone: updates, goals, reports, automations, permissions) |
+| Concurrency | 40 parallel rate-limit calls → exactly 25 pass / 15 refused; parallel submissions in several organizations all land; 8 parallel double-submits → exactly 1; two admins demoting each other at once → exactly 1 succeeds; 6 workers racing one delivery → 1 send; concurrent sweeps → each delivery once; lease exclusive under 12 concurrent acquirers; crashed lease expires |
+| Deployed smoke test (`tests/live/10-embarko-smoke.mts`, 34 checks) | all functional checks pass: onboarding, invitations, sign-in rules, isolation between organizations (404 / nothing visible), scheduler routes refuse missing/wrong secret, visibility and hierarchy, goals with weighted roll-up, org chart, compare / insights, reports pages. The only check that can fail is "no server errors" when the sandbox network resets a connection (0.06–0.3% of requests in load runs; the app log shows no error). |
+| Backup + restore drill on the platform (repeated with the final schema) | nightly job: encrypted, uploaded, downloaded back and verified (≈180 KB). Restore via `RESTORE_FROM`: an organization created before the backup signs in afterwards; one created after it does not (rolled back); the flag removed → no second restore; `[migrate] database is up to date`. |
+| Migrations on the platform | six migrations applied on the live database; a redeploy that overlaps the old instance waits for the database lock (retries, never restores on a lock) |
+| Persistence across redeploys | accounts and data survive redeploys |
+| Scheduler | the three schedules (integrations every 15 min, backup nightly, weekly reports every 30 min) ran by themselves and on demand with `outcome: ok`; weekly reports answer `AI is not configured` until a key is added |
+| viaSocket on the platform | credentials present server-side; embed token works for an admin; Automations page 200. **Real Slack delivery from Embarko is still untested** (needs your browser authorization) |
+| AI | real-provider path tested against a fake provider and a local Anthropic-compatible stand-in (validation, injection handling, consent, review, idempotency, budgets). **Not yet tried against the real Anthropic API** (needs your key). |
 
 ## 4. Memory (platform, cgroup)
 
@@ -50,6 +53,15 @@ Load = 12 concurrent signed-in users requesting server-rendered pages non-stop (
 | **final**: Prisma small compiler + one-at-a-time scrypt | 60–88 | **136–142** | **173–179** (90–150 s) | 0 errors |
 | final, 5-minute soak | 170→ | 183 | **peak 189, plateau ~187, back to 154 afterwards** | no leak; ~26% headroom |
 
+### Final memory result (full feature set: visibility, goals, compare, reminders, backups, AI layer)
+
+| Configuration | idle | peak during heavy synthetic load | note |
+| --- | --- | --- | --- |
+| no V8 cap | ≈ 62 MB | 208 MB (~81%) | borderline |
+| **`NODE_OPTIONS=--max-old-space-size=160` (chosen, live)** | **62 MB** | **201 MB** in a 5-minute soak (12 concurrent users, ≈5,500 requests, plateau ≈ 198 MB) | back to ≈ 159 MB 45 s after the load, no growth over time; ≈ 21% headroom below the 256 MB limit |
+
+The load is far above a normal team's use, so everyday memory is lower (idle ≈ 62 MB; after a day of functional tests ≈ 135 MB). If a real workload ever hits the limit the platform restarts the app and the database is unharmed (WAL), but the headroom is the thing to watch: we did **not** remove any core feature to get here. Earlier rows of the table above (the 112 MB cap, etc.) were measured before the full feature set existed.
+
 Where the memory went (local profiling, `smaps`/V8 stats):
 * Prisma's WebAssembly query compiler: ~55–75 MB. The `compilerBuild = "small"` generator option saves ~30 MB.
 * Password hashing: Better Auth's scrypt needs ~32 MiB per hash and ran up to 4 in parallel (~130 MiB transient). `src/server/auth/password.ts` keeps the identical algorithm and stored format (verified compatible in both directions with Better Auth's own functions) but runs one hash at a time with a bounded queue. Peak after sign-ups fell from 233 to 136 MB.
@@ -61,12 +73,22 @@ Where the memory went (local profiling, `smaps`/V8 stats):
 * `X-Real-IP` and the head of `X-Forwarded-For` are client-controlled on this platform (observed: a client-sent `X-Real-IP` comes back unchanged; a spoofed `X-Forwarded-For` arrives as `spoof, <real client>, <platform hop>`). The old code (and Better Auth's default) would have let a client dodge or poison per-IP rate limits. Now `src/server/client-ip.ts` takes the entry just before the platform hop (`TRUSTED_PROXY_HOPS`, default 1), ignores anything prepended, and hands Better Auth a header we overwrite (`x-daymark-client-ip`). Unit-tested; on the live app the sign-in limit (10/min) triggers a 429 over a single connection and the old "could not determine a client IP" warning is gone. A full spoof test from the test sandbox is not possible because its outbound address rotates per request.
 * Next.js copies a local `.env` into `.next/standalone`; `scripts/postbuild.mjs` now deletes it. The upload excludes `.env*`, `.next`, tests and archives (verified: 0 env files in the tarball).
 
-## 6. Remaining limitations / not done yet
+## 6. Remaining limitations and actions for you
 
-* **Not built yet** (next stages, per the approved plan): encrypted backups to Embarko storage + restore drill; reminders and the tick/backup/weekly schedules; AI summaries, weekly reports, manager review; further memory work beyond the above (current headroom is ~26% under heavy synthetic load).
-* The platform gives **no backups** of `DATA_DIR`; until our backup job exists, the database is a single copy.
-* Embarko file URLs are public: backups must be encrypted before upload (planned).
+**Done since the first report:** encrypted backups with a restore drill, visibility/hierarchy/org chart, goals (OKR + KPIs + tasks), work-to-goal linking, compare and profiles, scale work (a quarter of data for 300 people), reminders, AI summaries / weekly reports / manager review, the diagnostics route and `DIAG_TOKEN` are removed.
+
+**Your actions**
+* Set your own production `BACKUP_ENCRYPTION_KEY` in Embarko (App setup) and keep a copy outside Embarko. The key used in testing is a test key, and the test backups in Embarko storage were made with it (delete them from the storage page once your own key is set and a new backup exists).
+* Add `ANTHROPIC_API_KEY` in Embarko's App setup (never in chat), then use Settings → AI → test once, and approve one real report.
+* Rotate the credentials that appeared in chat or were used in testing: the Embarko deploy key (create a new one at embarko.ai/app/tokens, revoke the old one), and the viaSocket embed secret (then update `VIASOCKET_EMBED_SECRET` in Embarko). `BETTER_AUTH_SECRET` was generated server-side and never displayed.
+* Run the Slack end-to-end test with your own authorization (`tests/live/02-real-delivery.mts` and `05-slack.mts` still use PostgreSQL SQL and must be ported first).
+* Tell staff before opening visibility company-wide and review the AI disclosure shown in Settings.
+
+**Limits that remain**
+* The platform gives no backups of its own; ours are nightly (restore loses at most the changes since the last one). Embarko file URLs are public, so only ciphertext is uploaded.
+* Memory: ≈ 21% headroom under heavy synthetic load (see §4). A single process with a 256 MB limit is the ceiling for this design; very large imports or many simultaneous AI jobs would need the platform's memory raised.
+* Occasional connection resets (0.06–0.3%) appear in synthetic load tests between the test sandbox and the platform; no server error accompanies them.
+* On a redeploy the new instance can wait up to about a minute for the old instance to release the database (it retries; the platform restarts it if needed).
 * SQLite is single-writer; case-insensitive search is ASCII only.
-* `tests/live/02-real-delivery.mts` and `05-slack.mts` still use `psql`/PostgreSQL date SQL and must be ported before the Slack run.
-* The temporary diagnostics route `/api/diag/memory` (404 unless `DIAG_TOKEN` is set) and `DIAG_TOKEN` must be removed before production.
-* **Credentials to rotate** (they appeared in chat or were used during testing): the Embarko deploy key (create a new one at embarko.ai/app/tokens, revoke the old one, then update `~/.embarko/credentials`), the viaSocket embed secret (rotate in viaSocket, then update `VIASOCKET_EMBED_SECRET` in Embarko's App setup and the local `.env`), and `DIAG_TOKEN` (deleted with the route). `BETTER_AUTH_SECRET` on Embarko was generated server-side and never displayed.
+* Progress and update content are self-reported and labelled so; nothing is auto-verified.
+* The sign-in rate limit is per client address (10/min); behind a shared office address, many people signing in at once can be throttled briefly. A full header-spoofing test could not be run from the test sandbox (its address rotates per request); the logic is unit-tested.

@@ -7,7 +7,7 @@ import { EVENT_CATALOG, enqueueEvent, eventKeys, type MissingPayload } from "./e
 
 /**
  * Detect people who haven't submitted by their organization's cut-off, and enqueue one
- * `update.missing` event per person per day. Designed for an unreliable scheduler (Vercel Cron is
+ * `update.missing` event per person per day. Designed for an unreliable scheduler (a platform scheduler is
  * best-effort, can skip a run or fire twice): it is a pure reconciliation of "who is still missing
  * today", and the unique event key makes any number of repeat runs harmless.
  * Only organizations with an active automation linked to this event are examined.

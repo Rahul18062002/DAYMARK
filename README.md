@@ -1,13 +1,23 @@
 # Daymark — Make Every Day Count.
 
-Daymark helps companies collect daily work updates, understand individual and team progress,
-surface blockers, and (from Phase 3) generate AI summaries and weekly reports.
+Daymark helps companies collect daily work updates, see individual, team and company progress, surface
+blockers, tie everyday work to company goals, and review AI-assisted summaries and weekly reports.
 It is a multi-company SaaS: every company gets an isolated workspace.
 
-**Status: Phase 1 (Foundation) and Phase 2 (Daily Updates) complete.** AI summaries and weekly reports (Phase 3) and the finalization pass (Phase 4) are not built yet.
+## What it does
+* **Daily updates** — one per person per day, with drafts, edit window, revision history, late flag and links; work can be tagged to goals.
+* **Transparency by hierarchy** — an organization-wide visibility setting (managers only → team → department → everyone), with the reporting line (up to the CEO) always able to see downward. Blockers can be masked; the model is enforced on the server (`src/server/policy`).
+* **Goals (OKRs)** — company → department → team → person objectives with key results, KPIs and tasks; weighted roll-up, health (on track / at risk / off track), owners, audit trail. Work is linked to goals both ways.
+* **Org chart, Compare and Profiles** — reporting tree for 100–300 people, peer / team-lead / mentor comparison, and per-person profiles (consistency, blockers, goal contribution). Progress is self-reported and labelled as such.
+* **Reminders** — one organization-wide time (timezone and working days aware), delivered through viaSocket (e.g. to Slack) — optional.
+* **AI summaries, weekly reports and manager review** — Anthropic first, provider-independent; off until an admin gives consent in Settings; every generated report is a draft that a person approves, edits or rejects before it is published.
+* **Automations (viaSocket)** — optional outbound events for the company's own apps.
+* **Backups** — nightly encrypted backups to Embarko storage with a restore drill (see below).
+
+**Status:** all of the above is implemented and tested (integration, browser, and a deployed smoke test). Known limits are listed in [docs/embarko-diagnostics-report.md](docs/embarko-diagnostics-report.md).
 
 ## Stack
-Next.js 16 (App Router) · TypeScript · Tailwind CSS 4 · PostgreSQL · Prisma 7 · Better Auth · Zod · Nodemailer (SMTP) · Vitest · Playwright
+Next.js 16 (App Router) · TypeScript · Tailwind CSS 4 · SQLite (better-sqlite3) · Prisma 7 · Better Auth · Zod · Nodemailer (SMTP) · Vitest · Playwright
 
 ## Architecture
 ```
@@ -24,7 +34,7 @@ src/
     http.ts       route wrapper: origin check, auth, rate limit, uniform errors
   components/     ui primitives, brand (logo), layout shell
 prisma/           schema + migrations
-tests/            Vitest integration tests (real PostgreSQL)
+tests/            Vitest integration tests (real SQLite file)
 e2e/              Playwright end-to-end tests (real servers, real SMTP capture)
 ```
 
@@ -58,7 +68,16 @@ Open `/onboarding` to create the first company workspace.
 | `BETTER_AUTH_URL` | yes | Public base URL, no trailing slash. Must match the browser origin. |
 | `NEXT_PUBLIC_APP_URL` | yes | Same public URL |
 | `SMTP_HOST`, `SMTP_PORT`, `SMTP_SECURE`, `SMTP_USER`, `SMTP_PASSWORD`, `SMTP_FROM` | no | Email. **Without `SMTP_HOST`**: invitation links are shown to the admin to copy, and Forgot password says email isn't configured. Nothing pretends to send. |
-| `AI_PROVIDER`, `AI_MODEL`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY` | Phase 3 | Validated but unused until Phase 3 |
+| `AI_PROVIDER`, `AI_MODEL`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY` | no | AI summaries and weekly reports. Without a key the AI features report "not configured" and nothing is sent anywhere. Even with a key, an admin must enable AI (and accept the disclosure) in Settings. |
+| `ANTHROPIC_BASE_URL`, `OPENAI_BASE_URL` | no | Optional gateway / stand-in URL (tests use a local fake). |
+| `CRON_SECRET` | yes (scheduler) | Created by Embarko. The `/api/cron/*` routes refuse to run without it. |
+| `BACKUP_ENCRYPTION_KEY` | yes (backups) | ≥32 characters, **separate from every other secret**. Backups are AES-encrypted before they leave the app, because Embarko file URLs are public. **Keep a copy outside Embarko: without it a backup cannot be restored.** |
+| `RESTORE_FROM` | no | Filename of a backup (`dmbk-….gz`) to restore at the next start. Remove it afterwards (the restore is skipped once the file has been applied, but leave no flag behind). |
+| `RESTORE_ON_EMPTY` | no | `true`: if the database file is missing at boot, restore the newest backup automatically. |
+| `TRUSTED_PROXY_HOPS` | no | Default `1`. How many platform proxies sit in front of the app (client-IP detection for rate limits). |
+| `KEEP_ALIVE_TIMEOUT` | no | Default `65000` ms (set by `scripts/start.mjs`); must exceed the platform proxy's idle timeout. |
+| `NODE_OPTIONS` | no | On Embarko set `--max-old-space-size=160` to keep the process inside the 256 MB limit. |
+| `STORAGE_URL`, `STORAGE_TOKEN`, `APP_NAME` | injected | Provided by Embarko for file storage (backups). |
 
 ## Tests
 ```bash
@@ -76,12 +95,17 @@ Copy `.env.test.example` to `.env.test` (it points at `.tmp-sqlite/test.db`, rec
 * The earlier PostgreSQL migrations are kept, unused, in `prisma/migrations-postgres-archive/` (git tag `pre-sqlite` is the last PostgreSQL version).
 * SQLite specifics handled in code: working days are stored as `"1,2,3,4,5"` (`src/lib/working-days.ts`); an update's day is a `YYYY-MM-DD` string; PostgreSQL advisory locks became a lease table (`JobLock`); name/email search is case-insensitive for ASCII only.
 
+## Backups and restore
+* Embarko does not back up `DATA_DIR`, so Daymark does: nightly (`/api/cron/backup`) it takes a consistent snapshot (`VACUUM INTO`), checks integrity, compresses and encrypts it with `BACKUP_ENCRYPTION_KEY`, uploads it to Embarko storage, **downloads it again and verifies it**, and prunes old ones. Uploaded files are public URLs, but they contain only ciphertext.
+* Restore: set `RESTORE_FROM=<filename>` and restart; the app restores before it starts serving, keeps the replaced database as a snapshot, and refuses a file that fails decryption or integrity checks. Then remove the variable. Drilled on the live platform: data created before the backup came back, data created after it was rolled back, and the restore did not repeat on the next restart.
+* Losing `BACKUP_ENCRYPTION_KEY` makes every backup unreadable — store a copy somewhere other than Embarko.
+
 ## Deploying to Embarko
 Daymark is hosted only on Embarko (one process, 256 MB, SQLite under `DATA_DIR`). Findings, measurements and limitations: [docs/embarko-diagnostics-report.md](docs/embarko-diagnostics-report.md); the plan: [embarko-plan.md](embarko-plan.md).
 
 * Upload the source (without `node_modules`, `.next`, `.env*`, tests). Embarko runs `npm run build` (`prisma generate`, `next build`, standalone copy) and `npm start` (`scripts/start.mjs`: safe migration, then the single Next.js process).
 * `embarko.json` holds the app id and the scheduler entries (`CRON_SECRET` is created by Embarko; scheduled routes check it).
-* Secrets go in Embarko's environment (App setup), never in the upload: `BETTER_AUTH_SECRET`, `BETTER_AUTH_URL`, `NEXT_PUBLIC_APP_URL`, optional `VIASOCKET_*`, `SMTP_*`, AI keys.
+* Secrets go in Embarko's environment (App setup), never in the upload: `BETTER_AUTH_SECRET`, `BETTER_AUTH_URL`, `NEXT_PUBLIC_APP_URL`, `BACKUP_ENCRYPTION_KEY`, optional `VIASOCKET_*`, `SMTP_*`, AI keys.
 * `TRUSTED_PROXY_HOPS` (default `1`): how many proxies of the platform sit in front of the app; used to find the real client address for rate limits without trusting spoofable headers.
 
 ## Daily updates (Phase 2)
@@ -100,16 +124,15 @@ Company admins can connect their own apps (Slack, email, …) and decide what ha
 Daymark, from the **Automations** page, which embeds viaSocket's builder. **Daymark works fully without it** and
 nothing in Daymark depends on viaSocket being reachable.
 
-* **What's sent:** three outbound events — *Daily Update Submitted*, *Employee Reports a Blocker*, *Daily Update
-  Missing* — with minimal payloads. Full contract, field-by-field sources and delivery guarantees:
-  [docs/automation-events.md](docs/automation-events.md). Weekly-report events come with Phase 3; Daymark actions
-  and any inbound API are deliberately not part of this.
+* **What's sent:** five outbound events — *Daily Update Submitted*, *Employee Reports a Blocker*, *Daily Update
+  Missing*, *Reminder*, *Report Published* (a link only, never the report text) — with minimal payloads. Full contract, field-by-field sources and delivery guarantees:
+  [docs/automation-events.md](docs/automation-events.md). Daymark actions and any inbound API are deliberately not part of this.
 * **Isolation:** each organization is one viaSocket identity, `daymark-org-<organizationId>`, derived on the server
   from the session. Flow URLs (which run the company's connected apps) are encrypted at rest and never sent to the browser.
 * **Access:** Admins only by default; an admin can authorize managers; employees never.
 * **Reliability:** stable event IDs, unique event keys (duplicate-safe), one delivery row per event and flow, an
-  attempt log (retry history), 8 s timeout, backoff retries, lease-based claiming with `FOR UPDATE SKIP LOCKED`, an
-  advisory lock around the cron pass. Delivery is **at-least-once**: duplicates are possible, so automations should
+  attempt log (retry history), 8 s timeout, backoff retries, lease-based claiming, a lease
+  lock around the cron pass. Delivery is **at-least-once**: duplicates are possible, so automations should
   dedupe on `eventId`.
 
 ### Configuration
@@ -118,53 +141,27 @@ nothing in Daymark depends on viaSocket being reachable.
 | `VIASOCKET_ORG_ID`, `VIASOCKET_PROJECT_ID`, `VIASOCKET_EMBED_SECRET` | From viaSocket (Integrations → your embed → Install Code). Server-side only. The secret also derives the key that encrypts stored flow URLs: rotating it requires **Refresh** on the Automations page and re-linking events. |
 | `CRON_SECRET` | ≥16 random characters. Vercel sends it as `Authorization: Bearer …` to `/api/cron/integrations`. The route refuses to run without it. |
 
-### Vercel Cron — schedule and plan limits
-`vercel.json` runs `/api/cron/integrations` every **15 minutes** (`*/15 * * * *`, UTC). It detects missing updates,
-delivers/retries everything due, and applies retention. Checked against Vercel's documentation (Cron Jobs: usage &
-pricing, last updated 2026-07-15; Schedules: limits):
+### Scheduler (Embarko)
+`embarko.json` registers three schedules; the platform calls each route with `GET` and `Authorization: Bearer $CRON_SECRET`:
 
-| Plan | Legacy `crons` (what `vercel.json` uses) | Newer `schedules` property (public beta) |
+| Schedule | Route | Does |
 |---|---|---|
-| **Pro / Enterprise** | every minute is allowed → **15-minute schedule works** | every minute (jitter 1–15 min) |
-| **Hobby** | **once per day only** (±59 min); a more frequent expression **fails the deployment** | at most every 15 minutes, always a 15-minute jitter window; 5,000 runs per billing period |
+| `*/15 * * * *` | `/api/cron/integrations` | reminders → missing-update detection → delivery / retry sweep → retention purge |
+| `30 2 * * *` | `/api/cron/backup` | encrypted, verified backup to Embarko storage (keeps the newest few) |
+| `*/30 * * * *` | `/api/cron/weekly-reports` | drafts weekly reports and daily summaries that are due (only for organizations with AI enabled and consented; budgeted per run) |
 
-* **A Pro (or Enterprise) plan is required for the shipped configuration.** On Hobby, either switch the entry to the
-  `schedules` form (same route, `"requestMethod": "GET"`, `CRON_SECRET` unchanged — Vercel documents this as a
-  configuration-only migration; remove the `crons` entry so it doesn't run twice) or accept daily runs.
-* **Timing is approximate:** schedules start within a jitter window, so a reminder can fire up to ~15 min after the
-  15-minute boundary that follows the cut-off. Retries are picked up by the same sweep.
-* Vercel's cron delivery is best-effort: a run can be skipped or delivered twice, runs can overlap, and Vercel never
-  retries a failed run, never follows redirects, and only invokes the production deployment. The job is built for this:
-  idempotent event keys, claim leases, an advisory lock, and a pass that re-derives what's outstanding each time. On a
-  once-a-day schedule, first delivery attempts still happen immediately (in the background after the action); only
-  retries and missing-update reminders are delayed.
+* Delivery by the scheduler is best-effort: a run can be skipped or arrive twice. The job is built for that: idempotent event keys, claim leases, a lease lock (`JobLock`) so overlapping runs do not double-work, and a pass that re-derives what is outstanding each time.
+* Reminders and the missing-update cut-off follow the organization's timezone and working days, so a run a few minutes late only delays them slightly.
 
 ### Tests
 `npm test` covers the delivery machinery (idempotency, races, retries, history, isolation) and
 `npm run test:e2e` the Automations UI/permissions with dummy viaSocket values and no network. Real-connection tests
 (`tests/live/`) need your own viaSocket keys and a connected Slack test account and are run by hand.
 
-## Phase 1 checklist
-- [x] Project setup, Prisma schema + migrations, tenant-safe composite foreign keys
-- [x] Better Auth (email + password), sessions, forgot / reset password (SMTP)
-- [x] Organization onboarding (creates org, settings, first admin)
-- [x] Invitations (SMTP email or copyable link, resend, revoke, single-use, 7-day expiry); existing-account acceptance for future multi-org
-- [x] Roles & server-side policy; manager scope (+ explicit team access grants)
-- [x] Employee management (role, job title, team, department, manager, deactivate / reactivate with session revocation, last-admin protection, no reporting loops)
-- [x] Departments & teams; update-schedule settings; organization profile
-- [x] Role-specific dashboards (real data), role-aware navigation
-- [x] Audit log writes + admin activity feed
-- [x] Daymark branding (logo, favicon, light/dark), responsive layout, empty / loading / error states
-
-## Phase 2 checklist
-- [x] Schema + migration (updates, items, links, revisions) with tenant-safe composite foreign keys
-- [x] Draft / submit / edit with edit window, late flag, one-per-day, backdating limit
-- [x] Employee dashboard (today's status, week overview, recent updates), My Updates, update form with multiple entries and links
-- [x] Manager/admin Team Updates: cards, trend chart, filters, table, detail, version history, raw highlights
-- [x] Source-channel ingest abstraction
-
-## Remaining
-- Phase 3: Reports navigation, AI summaries (an AI-summary column in the team table arrives with them) (Anthropic default, OpenAI supported), weekly reports, manager review
-- Phase 4: hardening pass, full E2E for updates/AI/reports, deployment polish
-- Later: viaSocket Embed integration, Slack / email / WhatsApp channels, file uploads, subscription plans
-- Known follow-ups: Team Updates caps at 500 rows (no pagination yet); admins and managers are counted among people expected to submit; the 7-day backdating limit is a constant, not a setting; email-ownership verification at onboarding; admin-initiated password reset when SMTP is unavailable; audit-log viewer page; card layout for the Employees table on narrow phones
+## Remaining / known limitations
+* Real-provider AI output has been tested against a fake provider and a local stand-in only; try it once with your own key (Settings → AI → test) before relying on it.
+* Real Slack delivery from the deployed app needs a connected Slack account in viaSocket and has not been exercised end to end.
+* SQLite is single-writer; name/email search is case-insensitive for ASCII only.
+* Goal progress and update content are self-reported and labelled as such; nothing is verified automatically.
+* Channels other than the dashboard (Slack / email / WhatsApp input), file uploads and subscription plans are not built.
+* Opening visibility to the whole company is a policy decision: tell staff (and review the AI disclosure) before turning it on.

@@ -9,7 +9,7 @@ export const maxDuration = 60;
 
 const digest = (v: string) => createHash("sha256").update(v).digest();
 
-// Vercel Cron calls this with GET and `Authorization: Bearer $CRON_SECRET`. It is a public URL,
+// The Embarko scheduler (embarko.json) calls this with GET and `Authorization: Bearer $CRON_SECRET`. It is a public URL,
 // so without a configured secret it refuses to run at all.
 export async function GET(req: Request) {
   const secret = env().CRON_SECRET;

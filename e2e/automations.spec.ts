@@ -193,7 +193,7 @@ test.describe.serial("Daymark × viaSocket — Automations (UI, permissions, iso
     const ok = await anon.get("/api/cron/integrations", { headers: { authorization: `Bearer ${process.env.CRON_SECRET}` } });
     expect(ok.status()).toBe(200);
     expect(await ok.json()).toHaveProperty("sweep");
-    // Two overlapping cron invocations (Vercel can deliver twice) are both safe.
+    // Two overlapping cron invocations (a scheduler can deliver twice) are both safe.
     const [x, y] = await Promise.all([1, 2].map(() => anon.get("/api/cron/integrations", { headers: { authorization: `Bearer ${process.env.CRON_SECRET}` } })));
     expect([x.status(), y.status()]).toEqual([200, 200]);
   });

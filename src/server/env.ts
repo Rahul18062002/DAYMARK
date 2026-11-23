@@ -23,7 +23,7 @@ const schema = z.object({
   VIASOCKET_ORG_ID: z.string().optional(),
   VIASOCKET_PROJECT_ID: z.string().optional(),
   VIASOCKET_EMBED_SECRET: z.string().optional(),
-  // Shared secret Vercel sends as `Authorization: Bearer …` to the cron route.
+  // Shared secret the Embarko scheduler sends as `Authorization: Bearer …` to the cron routes.
   CRON_SECRET: z.string().optional(),
 });
 

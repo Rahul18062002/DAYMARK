@@ -499,7 +499,7 @@ describe("F. Duplicate-safe processing (concurrency, leases, repeats)", () => {
 });
 
 // ── G. missing-update detection ────────────────────────────────────────────────────────────────
-describe("G. Missing-update detection (Vercel-cron-safe reconciliation)", () => {
+describe("G. Missing-update detection (scheduler-safe reconciliation)", () => {
   async function team() {
     const { admin, organizationId } = await makeOrg("Miss");
     const a = (await addMember(admin, "EMPLOYEE", { name: "Asha" })).ctx;
