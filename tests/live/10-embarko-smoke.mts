@@ -1,4 +1,4 @@
-// End-to-end smoke + load test against the DEPLOYED app (LIVE_BASE=https://<app>.embarko.app, DIAG_TOKEN=…).
+// End-to-end smoke + load test against the DEPLOYED app (LIVE_BASE=https://<app>.embarko.app). The memory checks need a temporary diagnostics route (removed from production); they are skipped when none answers.
 // Creates two throw-away organizations through the real API, exercises auth, invitations, daily updates,
 // the manager view, tenant isolation, the scheduler route, then drives load while sampling real platform memory.
 import { BASE, Daymark, check, summary, sleep } from "./lib.mts";
@@ -122,7 +122,9 @@ console.log(`LOAD ${DURATION}s, ${CONC} concurrent: ${ok} ok, ${bad2} errors, p5
 const m2 = await mem(); if (m2) show("end of load", m2);
 if (samples.length) console.log("MEM samples (cgroup MB):", samples.map((s) => s.cur).join(" "));
 check("load run had no server errors", bad2 === 0, `${bad2} errors of ${ok + bad2}`);
-check("memory stayed under the 256 MB limit (cgroup peak)", !!m2 && m2.peak < m2.limit, `peak ${m2?.peak} MB`);
-check("memory peak leaves ≥ 20% headroom", !!m2 && m2.peak < m2.limit * 0.8, `peak ${m2?.peak} / ${m2?.limit} MB`);
+if (m2) {
+  check("memory stayed under the 256 MB limit (cgroup peak)", m2.peak < m2.limit, `peak ${m2.peak} MB`);
+  check("memory peak leaves ≥ 20% headroom", m2.peak < m2.limit * 0.8, `peak ${m2.peak} / ${m2.limit} MB`);
+} else console.log("SKIP  memory checks (no diagnostics route on this deployment)");
 console.log(`STATE alpha=${A.organizationId} email=${A.email} password=${PW}`);
 summary();
