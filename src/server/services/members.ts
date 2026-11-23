@@ -17,12 +17,15 @@ const memberSelect = {
   departmentId: true,
   teamId: true,
   managerId: true,
+  level: true,
+  mentorId: true,
   createdAt: true,
   deactivatedAt: true,
   user: { select: { name: true, email: true } },
   department: { select: { name: true } },
   team: { select: { name: true } },
   manager: { select: { user: { select: { name: true } } } },
+  mentor: { select: { user: { select: { name: true } } } },
   teamAccess: { select: { teamId: true } },
 } satisfies Prisma.MembershipSelect;
 
@@ -44,6 +47,9 @@ function toDto(m: Row) {
     teamName: m.team?.name ?? null,
     managerId: m.managerId,
     managerName: m.manager?.user.name ?? null,
+    level: m.level,
+    mentorId: m.mentorId,
+    mentorName: m.mentor?.user.name ?? null,
     accessTeamIds: m.teamAccess.map((a) => a.teamId),
     createdAt: m.createdAt.toISOString(),
     deactivatedAt: m.deactivatedAt?.toISOString() ?? null,
@@ -206,6 +212,13 @@ export async function updateMember(actor: A, id: string, input: unknown) {
       }
     }
 
+    // A mentor is another person in the same organization (never oneself).
+    if (data.mentorId) {
+      if (data.mentorId === target.id) throw badRequest("A person can't be their own mentor.");
+      const mentor = await tx.membership.count({ where: { id: data.mentorId, organizationId: actor.organizationId } });
+      if (!mentor) throw badRequest("Choose a mentor from your organization.");
+    }
+
     const statusChanged = nextStatus !== target.status;
     const updated = await tx.membership.update({
       where: { id: target.id },
@@ -213,6 +226,8 @@ export async function updateMember(actor: A, id: string, input: unknown) {
         role: data.role,
         status: data.status,
         jobTitle: data.jobTitle === undefined ? undefined : data.jobTitle || null,
+        level: data.level,
+        mentorId: data.mentorId,
         departmentId,
         teamId: assigned.teamId,
         managerId: assigned.managerId,

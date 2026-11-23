@@ -2,7 +2,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
-import { Network, Pencil, Plus, Trash2 } from "lucide-react";
+import { Eye, Network, Pencil, Plus, Trash2 } from "lucide-react";
 import { api, ApiError } from "@/lib/api";
 import { timezoneOptions } from "@/lib/timezones";
 import { Button } from "@/components/ui/button";
@@ -15,11 +15,12 @@ import { cn } from "@/lib/utils";
 type Dept = { id: string; name: string; teamCount: number; memberCount: number };
 type Team = { id: string; name: string; departmentId: string | null; departmentName: string | null; managerId: string | null; managerName: string | null; memberCount: number };
 type Mgr = { id: string; name: string; role: string };
-type Settings = { updateCutoffTime: string; editWindowHours: number; workingDays: number[]; aiEnabled: boolean };
-type Tab = "organization" | "structure" | "schedule";
+type Scope = "OWN" | "TEAM" | "DEPARTMENT" | "COMPANY";
+type Settings = { updateCutoffTime: string; editWindowHours: number; workingDays: number[]; aiEnabled: boolean; visibilityScope: Scope; peersSeeBlockers: boolean };
+type Tab = "organization" | "structure" | "schedule" | "visibility";
 
 const TABS: { id: Tab; label: string }[] = [
-  { id: "organization", label: "Organization" }, { id: "structure", label: "Departments & teams" }, { id: "schedule", label: "Update schedule" },
+  { id: "organization", label: "Organization" }, { id: "structure", label: "Departments & teams" }, { id: "schedule", label: "Update schedule" }, { id: "visibility", label: "Visibility" },
 ];
 
 export function SettingsTabs(p: { initialTab: Tab; org: { name: string; timezone: string; logoUrl: string }; settings: Settings; departments: Dept[]; teams: Team[]; managers: Mgr[] }) {
@@ -36,6 +37,7 @@ export function SettingsTabs(p: { initialTab: Tab; org: { name: string; timezone
         {tab === "organization" && <OrganizationForm org={p.org} />}
         {tab === "structure" && <Structure departments={p.departments} teams={p.teams} managers={p.managers} />}
         {tab === "schedule" && <ScheduleForm settings={p.settings} />}
+        {tab === "visibility" && <VisibilityForm settings={p.settings} />}
       </div>
     </div>
   );
@@ -84,7 +86,7 @@ function ScheduleForm({ settings }: { settings: Settings }) {
     <Card className="max-w-2xl">
       <CardHeader title="Update schedule" description="When daily updates are expected and how long they stay editable." />
       <CardBody>
-        <form className="space-y-5" onSubmit={(e) => { e.preventDefault(); s.run(() => api("/api/organization/settings", { method: "PATCH", body: v }), "Settings saved."); }}>
+        <form className="space-y-5" onSubmit={(e) => { e.preventDefault(); s.run(() => api("/api/organization/settings", { method: "PATCH", body: { updateCutoffTime: v.updateCutoffTime, editWindowHours: v.editWindowHours, workingDays: v.workingDays, aiEnabled: v.aiEnabled } }), "Settings saved."); }}>
           {s.error && <ErrorNotice>{s.error}</ErrorNotice>}
           <fieldset>
             <legend className="mb-2 text-sm font-medium">Working days</legend>
@@ -109,6 +111,46 @@ function ScheduleForm({ settings }: { settings: Settings }) {
             <span><span className="text-sm font-medium">Enable AI summaries</span><span className="block text-xs text-muted">When on, submitted updates can be summarized by AI. Requires an AI provider configured on the server.</span></span>
           </label>
           <Button type="submit" loading={s.busy}>Save schedule</Button>
+        </form>
+      </CardBody>
+    </Card>
+  );
+}
+
+const SCOPES: { id: Scope; title: string; text: string }[] = [
+  { id: "OWN", title: "Private to reporting lines", text: "People see only their own updates. Managers see everyone who reports to them, at any depth." },
+  { id: "TEAM", title: "Team peers", text: "Everyone can also read updates from people on their team or with the same manager." },
+  { id: "DEPARTMENT", title: "Department", text: "Everyone can also read updates from people in their department." },
+  { id: "COMPANY", title: "Whole company", text: "Everyone can read everyone's submitted updates, all the way up to the CEO. Maximum transparency." },
+];
+
+function VisibilityForm({ settings }: { settings: Settings }) {
+  const s = useSave();
+  const [scope, setScope] = useState<Scope>(settings.visibilityScope);
+  const [blockers, setBlockers] = useState(settings.peersSeeBlockers);
+  return (
+    <Card className="max-w-2xl">
+      <CardHeader title="Who can see updates" description="Decide how open work updates are across your company." />
+      <CardBody>
+        <form className="space-y-5" onSubmit={(e) => { e.preventDefault(); s.run(() => api("/api/organization/settings", { method: "PATCH", body: { visibilityScope: scope, peersSeeBlockers: blockers } }), "Visibility saved."); }}>
+          {s.error && <ErrorNotice>{s.error}</ErrorNotice>}
+          <fieldset className="space-y-2">
+            <legend className="sr-only">Visibility level</legend>
+            {SCOPES.map((o) => (
+              <label key={o.id} className={cn("flex cursor-pointer items-start gap-3 rounded-lg border p-3 transition-colors", scope === o.id ? "border-primary bg-primary-soft" : "border-border hover:bg-surface-muted")}>
+                <input type="radio" name="scope" className="mt-1" checked={scope === o.id} onChange={() => setScope(o.id)} />
+                <span><span className="text-sm font-medium">{o.title}</span><span className="block text-xs text-muted">{o.text}</span></span>
+              </label>
+            ))}
+          </fieldset>
+          <label className="flex cursor-pointer items-start gap-3 rounded-lg border border-border p-3">
+            <input type="checkbox" className="mt-1" checked={blockers} onChange={(e) => setBlockers(e.target.checked)} />
+            <span><span className="text-sm font-medium">Let colleagues see blockers</span><span className="block text-xs text-muted">Off by default. Managers always see blockers for the people they manage; this only decides whether peers can too.</span></span>
+          </label>
+          {scope !== "OWN" && (
+            <p className="flex items-start gap-2 rounded-lg bg-warning-soft px-3 py-2.5 text-xs text-warning"><Eye className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />Opening visibility lets people read their colleagues&apos; submitted updates. Tell your team before you change this. Updates remain each person&apos;s own report and are not independently verified.</p>
+          )}
+          <Button type="submit" loading={s.busy}>Save visibility</Button>
         </form>
       </CardBody>
     </Card>

@@ -273,6 +273,18 @@ export function toDetailDto(row: DetailRow, editWindowHours?: number, now: Date 
 }
 export type UpdateDetail = ReturnType<typeof toDetailDto>;
 
+/** What a reader who is not the author (or the author's manager) is allowed to see of an update. */
+export function maskDetail(d: UpdateDetail, o: { hideBlockers: boolean; hideEmail: boolean }): UpdateDetail {
+  if (!o.hideBlockers && !o.hideEmail) return d;
+  return {
+    ...d,
+    employee: o.hideEmail ? { ...d.employee, email: "" } : d.employee,
+    hasBlockers: o.hideBlockers ? false : d.hasBlockers,
+    sections: o.hideBlockers ? { ...d.sections, BLOCKER: [] } : d.sections,
+    revisions: o.hideBlockers ? d.revisions.map((r) => ({ ...r, snapshot: { ...r.snapshot, sections: { ...r.snapshot.sections, BLOCKER: [] } } })) : d.revisions,
+  };
+}
+
 export const emptyContent = emptySections;
 export { detailInclude };
 

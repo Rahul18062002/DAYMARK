@@ -4,7 +4,7 @@ import { notFound, redirect } from "next/navigation";
 import { ArrowLeft } from "lucide-react";
 import { requirePageContext } from "@/server/auth/context";
 import { prisma } from "@/server/db";
-import { can } from "@/server/policy";
+import { can, canOpenTeamView } from "@/server/policy";
 import { getTeamUpdate } from "@/server/services/team-updates";
 import { AppError } from "@/server/errors";
 import { PageHeader, InfoNotice } from "@/components/ui/states";
@@ -14,7 +14,7 @@ export const metadata: Metadata = { title: "Team update" };
 
 export default async function TeamUpdatePage({ params }: { params: Promise<{ id: string }> }) {
   const ctx = await requirePageContext();
-  if (!can(ctx, "update:team")) redirect("/dashboard");
+  if (!can(ctx, "update:team") || !(await canOpenTeamView(prisma, ctx))) redirect("/dashboard");
   const { id } = await params;
   // Out-of-scope, draft and cross-organization updates all resolve to the same "not found".
   const update = await getTeamUpdate(ctx, id).catch((e) => { if (e instanceof AppError && e.status === 404) notFound(); throw e; });

@@ -4,13 +4,13 @@ export type NavIcon = "dashboard" | "users" | "settings" | "updates" | "team" | 
 export type NavItem = { href: string; label: string; icon: NavIcon; group: "Work" | "Goals" | "People" | "Admin" };
 
 /** Navigation mirrors server-side permissions; the pages and APIs enforce them independently. */
-export function navFor(role: Role, opts: { automations?: boolean; goals?: boolean; orgChart?: boolean; compare?: boolean } = {}): NavItem[] {
+export function navFor(role: Role, opts: { automations?: boolean; teamView?: boolean; goals?: boolean; orgChart?: boolean; compare?: boolean } = {}): NavItem[] {
   const manager = role === "ADMIN" || role === "MANAGER";
   const items: NavItem[] = [
     { href: "/dashboard", label: "Dashboard", icon: "dashboard", group: "Work" },
     { href: "/my-updates", label: "My Updates", icon: "updates", group: "Work" },
   ];
-  if (manager) items.push({ href: "/team-updates", label: "Team Updates", icon: "team", group: "Work" });
+  if (manager || opts.teamView) items.push({ href: "/team-updates", label: manager ? "Team Updates" : "Colleagues", icon: "team", group: "Work" });
   if (opts.goals) items.push({ href: "/goals", label: "Goals", icon: "goals", group: "Goals" });
   if (opts.orgChart) items.push({ href: "/org-chart", label: "Org chart", icon: "orgchart", group: "People" });
   if (opts.compare) items.push({ href: "/compare", label: "Compare", icon: "compare", group: "People" });

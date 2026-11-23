@@ -49,6 +49,8 @@ export const settingsSchema = z
       .min(1, "Pick at least one working day")
       .transform((d) => [...new Set(d)].sort()),
     aiEnabled: z.boolean(),
+    visibilityScope: z.enum(["OWN", "TEAM", "DEPARTMENT", "COMPANY"]),
+    peersSeeBlockers: z.boolean(),
   })
   .partial();
 
@@ -77,6 +79,8 @@ export const memberUpdateSchema = z
     teamId: idSchema.nullable(),
     managerId: idSchema.nullable(),
     jobTitle: z.string().trim().max(100).nullable(),
+    level: z.number().int().min(1).max(20).nullable(),
+    mentorId: idSchema.nullable(),
     accessTeamIds: z.array(idSchema).max(200),
   })
   .partial();

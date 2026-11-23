@@ -1,11 +1,11 @@
 import type { Prisma } from "@/generated/prisma/client";
 import { prisma } from "../db";
-import { assertCan, visibleMembershipWhere, type Actor } from "../policy";
+import { assertCan, readScope, type Actor, type ReadScope } from "../policy";
 import { badRequest, notFound } from "../errors";
 import { teamUpdateFilterSchema } from "../validation";
 import { addDays, daysBetween, isoWeekday, localDay, weekStart } from "@/lib/dates";
 import { parseWorkingDays } from "@/lib/working-days";
-import { detailInclude, toDetailDto } from "./updates";
+import { detailInclude, maskDetail, toDetailDto } from "./updates";
 
 type Opts = { now?: Date };
 export const MAX_RANGE_DAYS = 31;
@@ -17,9 +17,9 @@ async function cfgOf(organizationId: string) {
 }
 
 /** Members whose updates the actor may see (active only), optionally narrowed by filters. */
-async function scopedMembers(actor: Actor, f: { departmentId?: string; teamId?: string; membershipId?: string } = {}) {
+async function scopedMembers(actor: Actor, f: { departmentId?: string; teamId?: string; membershipId?: string } = {}, vs?: ReadScope) {
   assertCan(actor, "update:team");
-  const scope = await visibleMembershipWhere(prisma, actor);
+  const scope = (vs ?? (await readScope(prisma, actor))).where;
   return prisma.membership.findMany({
     where: { AND: [scope, { status: "ACTIVE", departmentId: f.departmentId, teamId: f.teamId, id: f.membershipId }] },
     select: { id: true, createdAt: true, teamId: true, departmentId: true, user: { select: { name: true } }, team: { select: { name: true } }, department: { select: { name: true } } },
@@ -29,13 +29,14 @@ async function scopedMembers(actor: Actor, f: { departmentId?: string; teamId?: 
 /** One submitted/edited update, only if its author is inside the actor's scope. Drafts are never visible here. */
 export async function getTeamUpdate(actor: Actor, id: string, opts: Opts = {}) {
   assertCan(actor, "update:team");
-  const scope = await visibleMembershipWhere(prisma, actor);
+  const vs = await readScope(prisma, actor);
   const row = await prisma.dailyUpdate.findFirst({
-    where: { id, organizationId: actor.organizationId, status: { in: ["SUBMITTED", "EDITED"] }, membership: { is: scope } },
+    where: { id, organizationId: actor.organizationId, status: { in: ["SUBMITTED", "EDITED"] }, membership: { is: vs.where } },
     include: detailInclude,
   });
   if (!row) throw notFound("Update");
-  return toDetailDto(row, undefined, opts.now);
+  // Peers see the work, not the person's contact details; blockers follow the company's setting.
+  return maskDetail(toDetailDto(row, undefined, opts.now), { hideBlockers: !vs.blockersFor(row.membershipId), hideEmail: !vs.isManagement });
 }
 
 export type TeamRow = {
@@ -64,11 +65,13 @@ export async function listTeamUpdates(actor: Actor, rawFilters: unknown = {}, op
   const days = daysBetween(from, to);
   if (days.length > MAX_RANGE_DAYS) throw badRequest(`Choose a range of at most ${MAX_RANGE_DAYS} days.`);
 
-  const scope = await visibleMembershipWhere(prisma, actor);
+  const vs = await readScope(prisma, actor);
+  const scope = vs.where;
   const memberFilter: Prisma.MembershipWhereInput = { departmentId: f.departmentId, teamId: f.teamId, id: f.membershipId };
 
   const wantUpdates = f.status !== "missing";
-  const wantMissing = !f.status || f.status === "missing";
+  // "Not submitted" is for people who manage; peers only ever read submitted work.
+  const wantMissing = vs.isManagement && (!f.status || f.status === "missing");
 
   const updates = await prisma.dailyUpdate.findMany({
     where: {
@@ -76,6 +79,8 @@ export async function listTeamUpdates(actor: Actor, rawFilters: unknown = {}, op
       updateDate: { gte: from, lte: to },
       status: f.status === "submitted" ? "SUBMITTED" : f.status === "edited" ? "EDITED" : { in: ["SUBMITTED", "EDITED"] },
       hasBlockers: f.blockers ? true : undefined,
+      // A blockers filter must not reveal blockers the actor may not read.
+      ...(f.blockers && vs.blockerMembershipIds ? { membershipId: { in: vs.blockerMembershipIds } } : {}),
       membership: { is: { AND: [scope, memberFilter] } },
     },
     orderBy: [{ updateDate: "desc" }, { updatedAt: "desc" }],
@@ -90,7 +95,7 @@ export async function listTeamUpdates(actor: Actor, rawFilters: unknown = {}, op
     ? updates.map((u) => ({
         key: u.id, updateId: u.id, membershipId: u.membershipId, employeeName: u.membership.user.name,
         teamName: u.membership.team?.name ?? null, departmentName: u.membership.department?.name ?? null,
-        date: u.updateDate, status: u.status as "SUBMITTED" | "EDITED", hasBlockers: u.hasBlockers,
+        date: u.updateDate, status: u.status as "SUBMITTED" | "EDITED", hasBlockers: u.hasBlockers && vs.blockersFor(u.membershipId),
         submittedLate: u.submittedLate, lastUpdatedAt: (u.lastEditedAt ?? u.firstSubmittedAt ?? u.updatedAt).toISOString(),
         preview: u.items[0]?.text ?? "",
       }))
@@ -99,7 +104,7 @@ export async function listTeamUpdates(actor: Actor, rawFilters: unknown = {}, op
   if (wantMissing && !f.blockers) {
     // "Not submitted" = an active person, on a working day, who has no submitted update for it.
     // Nobody is "missing" for days before they joined or days that haven't ended being due yet.
-    const members = await scopedMembers(actor, f);
+    const members = await scopedMembers(actor, f, vs);
     const submittedKeys = new Set(
       (await prisma.dailyUpdate.findMany({
         where: {
@@ -125,7 +130,7 @@ export async function listTeamUpdates(actor: Actor, rawFilters: unknown = {}, op
 
   rows.sort((a, b) => b.date.localeCompare(a.date) || (a.status === "MISSING" ? -1 : 0) - (b.status === "MISSING" ? -1 : 0) || a.employeeName.localeCompare(b.employeeName));
   const truncated = rows.length > MAX_ROWS;
-  return { from, to, today, rows: rows.slice(0, MAX_ROWS), truncated };
+  return { from, to, today, rows: rows.slice(0, MAX_ROWS), truncated, canSeeMissing: vs.isManagement };
 }
 
 /** Cards for one day: team size, submitted, pending, blockers, plus weekly activity. */
@@ -134,8 +139,9 @@ export async function teamOverview(actor: Actor, opts: Opts & { day?: string } =
   const cfg = await cfgOf(actor.organizationId);
   const today = localDay(opts.now ?? new Date(), cfg.tz);
   const day = opts.day ?? today;
-  const scope = await visibleMembershipWhere(prisma, actor);
-  const members = await scopedMembers(actor);
+  const vs = await readScope(prisma, actor);
+  const scope = vs.where;
+  const members = await scopedMembers(actor, {}, vs);
   const expectedIds = members.filter((m) => localDay(m.createdAt, cfg.tz) <= day).map((m) => m.id);
   const isWorkingDay = cfg.workingDays.includes(isoWeekday(day));
 
@@ -150,13 +156,14 @@ export async function teamOverview(actor: Actor, opts: Opts & { day?: string } =
     }),
   ]);
   const submittedIds = new Set(todays.map((t) => t.membershipId));
-  const pendingIds = isWorkingDay ? expectedIds.filter((id) => !submittedIds.has(id)) : [];
+  const pendingIds = isWorkingDay && vs.isManagement ? expectedIds.filter((id) => !submittedIds.has(id)) : [];
   return {
     day, today, isWorkingDay,
     totalMembers: members.length,
     submitted: submittedIds.size,
     pending: pendingIds.length,
-    withBlockers: new Set(todays.filter((t) => t.hasBlockers).map((t) => t.membershipId)).size,
+    withBlockers: new Set(todays.filter((t) => t.hasBlockers && vs.blockersFor(t.membershipId)).map((t) => t.membershipId)).size,
+    canSeeMissing: vs.isManagement,
     weekly: { updates: weekRows.length, contributors: new Set(weekRows.map((r) => r.membershipId)).size, weekStart: weekStart(day) },
   };
 }
@@ -168,9 +175,10 @@ export async function teamTrend(actor: Actor, opts: Opts & { days?: number } = {
   const end = localDay(opts.now ?? new Date(), cfg.tz);
   const n = Math.min(Math.max(opts.days ?? 14, 1), 60);
   const start = addDays(end, -(n - 1));
-  const scope = await visibleMembershipWhere(prisma, actor);
+  const vs = await readScope(prisma, actor);
+  const scope = vs.where;
   const [members, rows] = await Promise.all([
-    scopedMembers(actor),
+    scopedMembers(actor, {}, vs),
     prisma.dailyUpdate.groupBy({
       by: ["updateDate"],
       where: { organizationId: actor.organizationId, updateDate: { gte: start, lte: end }, status: { in: ["SUBMITTED", "EDITED"] }, membership: { is: scope } },
@@ -194,13 +202,17 @@ export async function teamHighlights(actor: Actor, opts: Opts & { days?: number;
   const cfg = await cfgOf(actor.organizationId);
   const end = localDay(opts.now ?? new Date(), cfg.tz);
   const start = addDays(end, -((opts.days ?? 7) - 1));
-  const scope = await visibleMembershipWhere(prisma, actor);
+  const vs = await readScope(prisma, actor);
+  const scope = vs.where;
   const take = opts.limit ?? 8;
   const q = async (section: "BLOCKER" | "PENDING" | "COMPLETED") => {
     const rows = await prisma.updateItem.findMany({
       where: {
         organizationId: actor.organizationId, section,
-        dailyUpdate: { status: { in: ["SUBMITTED", "EDITED"] }, updateDate: { gte: start, lte: end }, membership: { is: scope } },
+        dailyUpdate: {
+          status: { in: ["SUBMITTED", "EDITED"] }, updateDate: { gte: start, lte: end }, membership: { is: scope },
+          ...(section === "BLOCKER" && vs.blockerMembershipIds ? { membershipId: { in: vs.blockerMembershipIds } } : {}),
+        },
       },
       orderBy: [{ dailyUpdate: { updateDate: "desc" } }, { position: "asc" }],
       take: take * 3,

@@ -8,10 +8,14 @@ import { safeMigrate } from "../../scripts/safe-migrate.mjs";
 
 const repo = path.resolve(import.meta.dirname, "../..");
 
-function project() {
+function project(only?: number) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "daymark-mig-"));
   fs.mkdirSync(path.join(dir, "prisma"));
-  fs.cpSync(path.join(repo, "prisma/migrations"), path.join(dir, "prisma/migrations"), { recursive: true });
+  const src = path.join(repo, "prisma/migrations");
+  fs.mkdirSync(path.join(dir, "prisma/migrations"));
+  fs.copyFileSync(path.join(src, "migration_lock.toml"), path.join(dir, "prisma/migrations/migration_lock.toml"));
+  const all = fs.readdirSync(src).filter((n) => /^\d+_/.test(n)).sort();
+  for (const n of all.slice(0, only ?? all.length)) fs.cpSync(path.join(src, n), path.join(dir, "prisma/migrations", n), { recursive: true });
   fs.copyFileSync(path.join(repo, "prisma/schema.prisma"), path.join(dir, "prisma/schema.prisma"));
   fs.symlinkSync(path.join(repo, "node_modules"), path.join(dir, "node_modules"));
   fs.writeFileSync(path.join(dir, "prisma.config.ts"),
@@ -62,4 +66,40 @@ describe("safe migrations", () => {
 
     fs.rmSync(p.dir, { recursive: true, force: true });
   }, 120_000);
+
+  it("upgrading a database that already holds data keeps every row (each later migration is tried against the earlier schema)", () => {
+    const all = fs.readdirSync(path.join(repo, "prisma/migrations")).filter((n) => /^\d+_/.test(n)).sort();
+    if (all.length < 2) return;
+    const p = project(1);                                                       // the baseline only
+    const opts = { cwd: p.dir, env: p.env, log: p.log };
+    expect(safeMigrate(opts).ok).toBe(true);
+    const now = "2026-11-01T00:00:00.000Z";
+    const db = new Database(p.dbFile);
+    db.exec(`
+      INSERT INTO "User" ("id","name","email","updatedAt") VALUES ('u1','Una','una@x.test','${now}'),('u2','Uri','uri@x.test','${now}');
+      INSERT INTO "Organization" ("id","name","timezone","updatedAt") VALUES ('o1','Org One','UTC','${now}');
+      INSERT INTO "OrgSettings" ("organizationId","updatedAt") VALUES ('o1','${now}');
+      INSERT INTO "Membership" ("id","userId","organizationId","role","updatedAt") VALUES ('m1','u1','o1','ADMIN','${now}'),('m2','u2','o1','EMPLOYEE','${now}');
+      UPDATE "Membership" SET "managerId"='m1' WHERE "id"='m2';
+      INSERT INTO "DailyUpdate" ("id","organizationId","membershipId","updateDate","status","updatedAt") VALUES ('d1','o1','m2','2026-11-01','SUBMITTED','${now}');
+      INSERT INTO "UpdateItem" ("id","organizationId","dailyUpdateId","section","position","text") VALUES ('i1','o1','d1','WORKED_ON',0,'did things');
+      INSERT INTO "AuditLog" ("id","organizationId","action","entityType") VALUES ('a1','o1','x','y');`);
+    const tables = ["User", "Organization", "OrgSettings", "Membership", "DailyUpdate", "UpdateItem", "AuditLog"];
+    const count = (d: Database.Database) => Object.fromEntries(tables.map((t) => [t, (d.prepare(`SELECT COUNT(*) AS n FROM "${t}"`).get() as { n: number }).n]));
+    const before = count(db); db.close();
+    // now bring in every later migration
+    for (const n of all.slice(1)) fs.cpSync(path.join(repo, "prisma/migrations", n), path.join(p.dir, "prisma/migrations", n), { recursive: true });
+    const r = safeMigrate(opts);
+    expect(r.ok).toBe(true);
+    expect(r.snapshot && fs.existsSync(r.snapshot)).toBe(true);
+    const after = new Database(p.dbFile, { readonly: true });
+    expect(count(after)).toEqual(before);
+    expect(after.pragma("foreign_key_check")).toEqual([]);
+    expect(after.pragma("integrity_check", { simple: true })).toBe("ok");
+    // relationships survived the table rebuilds
+    expect((after.prepare(`SELECT "managerId" FROM "Membership" WHERE "id"='m2'`).get() as { managerId: string }).managerId).toBe("m1");
+    expect((after.prepare(`SELECT "text" FROM "UpdateItem" WHERE "id"='i1'`).get() as { text: string }).text).toBe("did things");
+    after.close();
+    fs.rmSync(p.dir, { recursive: true, force: true });
+  }, 180_000);
 });

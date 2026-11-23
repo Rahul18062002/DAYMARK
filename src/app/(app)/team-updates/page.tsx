@@ -3,7 +3,8 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { ClipboardList } from "lucide-react";
 import { requirePageContext } from "@/server/auth/context";
-import { can } from "@/server/policy";
+import { can, canOpenTeamView } from "@/server/policy";
+import { prisma } from "@/server/db";
 import { filterOptions, listTeamUpdates, teamHighlights, teamOverview, teamTrend, type TeamRow } from "@/server/services/team-updates";
 import { AppError } from "@/server/errors";
 import { Button } from "@/components/ui/button";
@@ -27,7 +28,7 @@ function RowLink({ r, children }: { r: TeamRow; children: React.ReactNode }) {
 
 export default async function TeamUpdatesPage({ searchParams }: { searchParams: Promise<SP> }) {
   const ctx = await requirePageContext();
-  if (!can(ctx, "update:team")) redirect("/dashboard");
+  if (!can(ctx, "update:team") || !(await canOpenTeamView(prisma, ctx))) redirect("/dashboard");
   const sp = await searchParams;
   const filters = Object.fromEntries(
     (["from", "to", "departmentId", "teamId", "membershipId", "status", "blockers"] as const).flatMap((k) => (one(sp[k]) ? [[k, one(sp[k])!]] : [])),
@@ -44,7 +45,7 @@ export default async function TeamUpdatesPage({ searchParams }: { searchParams: 
 
   return (
     <>
-      <PageHeader title="Team Updates" description={ctx.role === "ADMIN" ? "Updates across your whole organization." : "Updates from the teams you manage."} />
+      <PageHeader title={ctx.role === "EMPLOYEE" ? "Colleagues" : "Team Updates"} description={ctx.role === "ADMIN" ? "Updates across your whole organization." : ctx.role === "MANAGER" ? "Updates from your reporting line and the teams you manage." : "What your colleagues are working on. This is read-only."} />
       <OverviewCards o={overview} />
 
       <Card className="mt-6">
@@ -58,7 +59,7 @@ export default async function TeamUpdatesPage({ searchParams }: { searchParams: 
           <Field label="To" htmlFor="f-to"><Input id="f-to" name="to" type="date" defaultValue={list?.to ?? filters.to} /></Field>
           <Field label="Status" htmlFor="f-status">
             <Select id="f-status" name="status" defaultValue={filters.status ?? ""}>
-              <option value="">All statuses</option><option value="submitted">Submitted</option><option value="edited">Edited</option><option value="missing">Not submitted</option>
+              <option value="">All statuses</option><option value="submitted">Submitted</option><option value="edited">Edited</option>{overview.canSeeMissing && <option value="missing">Not submitted</option>}
             </Select>
           </Field>
           <Field label="Employee" htmlFor="f-emp">

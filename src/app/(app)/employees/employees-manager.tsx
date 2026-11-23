@@ -204,7 +204,7 @@ function InviteDialog({ open, onClose, teams, managers, departments, emailConfig
   );
 }
 
-function EditDialog({ member, onClose, teams, managers, departments, selfId }: Props & { member: MemberDto; onClose: () => void }) {
+function EditDialog({ member, onClose, teams, managers, departments, selfId, members }: Props & { member: MemberDto; onClose: () => void }) {
   const router = useRouter();
   const isSelf = member.id === selfId;
   const [role, setRole] = useState<string>(member.role);
@@ -212,6 +212,8 @@ function EditDialog({ member, onClose, teams, managers, departments, selfId }: P
   const [departmentId, setDepartmentId] = useState(member.departmentId ?? "");
   const [managerId, setManagerId] = useState(member.managerId ?? "");
   const [jobTitle, setJobTitle] = useState(member.jobTitle ?? "");
+  const [level, setLevel] = useState(member.level ? String(member.level) : "");
+  const [mentorId, setMentorId] = useState(member.mentorId ?? "");
   const [access, setAccess] = useState<string[]>(member.accessTeamIds);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -230,7 +232,7 @@ function EditDialog({ member, onClose, teams, managers, departments, selfId }: P
 
   return (
     <Dialog open onOpenChange={(o) => !o && onClose()} title={member.name} description={member.email}>
-      <form className="space-y-4" onSubmit={(e) => { e.preventDefault(); save({ role, jobTitle: jobTitle || null, teamId: teamId || null, departmentId: departmentId || null, managerId: managerId || null, accessTeamIds: role === "MANAGER" ? access : undefined }, "Changes saved."); }}>
+      <form className="space-y-4" onSubmit={(e) => { e.preventDefault(); save({ role, jobTitle: jobTitle || null, level: level ? Number(level) : null, mentorId: mentorId || null, teamId: teamId || null, departmentId: departmentId || null, managerId: managerId || null, accessTeamIds: role === "MANAGER" ? access : undefined }, "Changes saved."); }}>
         {error && <ErrorNotice>{error}</ErrorNotice>}
         {isSelf && <InfoNotice>You can&apos;t change your own role or deactivate your own account.</InfoNotice>}
         <div className="grid gap-4 sm:grid-cols-2">
@@ -240,6 +242,10 @@ function EditDialog({ member, onClose, teams, managers, departments, selfId }: P
           <Field label="Department" htmlFor="e-dept" hint={teamDept ? `Set by the team (${teamDept}).` : undefined}>
             <Select id="e-dept" value={teamDept ? (teams.find((t) => t.id === teamId)?.departmentId ?? "") : departmentId} disabled={!!teamDept} onChange={(e) => setDepartmentId(e.target.value)}><option value="">None</option>{departments.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}</Select>
           </Field>
+        </div>
+        <div className="grid gap-4 sm:grid-cols-2">
+          <Field label="Level" htmlFor="e-level" hint="Seniority or grade (1–20). Used to group people at the same level."><Input id="e-level" type="number" min={1} max={20} value={level} onChange={(e) => setLevel(e.target.value)} /></Field>
+          <Field label="Mentor (optional)" htmlFor="e-mentor"><Select id="e-mentor" value={mentorId} onChange={(e) => setMentorId(e.target.value)}><option value="">No mentor</option>{members.filter((m) => m.id !== member.id && m.status === "ACTIVE").map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}</Select></Field>
         </div>
         <Field label="Manager" htmlFor="e-mgr"><Select id="e-mgr" value={managerId} onChange={(e) => setManagerId(e.target.value)}><option value="">No manager</option>{managers.filter((m) => m.id !== member.id).map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}</Select></Field>
 
