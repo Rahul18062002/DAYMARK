@@ -59,7 +59,7 @@ function useSave() {
 
 function OrganizationForm({ org }: { org: { name: string; timezone: string; logoUrl: string } }) {
   const s = useSave();
-  const zones = timezoneOptions();
+  const zones = timezoneOptions(org.timezone);
   const [v, setV] = useState(org);
   return (
     <Card className="max-w-2xl">

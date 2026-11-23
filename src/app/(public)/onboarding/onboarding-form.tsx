@@ -14,8 +14,8 @@ export function OnboardingForm() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [fields, setFields] = useState<Record<string, string>>({});
-  const zones = useMemo(timezoneOptions, []);
   const defaultTz = useMemo(() => Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC", []);
+  const zones = useMemo(() => timezoneOptions(defaultTz), [defaultTz]);
 
   async function onSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
